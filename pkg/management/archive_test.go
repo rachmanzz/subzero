@@ -191,3 +191,44 @@ func TestUnpackTarGz_MaxBytesDecompressionBomb(t *testing.T) {
 		t.Fatalf("expected ErrArchiveTooLarge, got: %v", err)
 	}
 }
+
+func TestPackTarGz(t *testing.T) {
+	srcDir, err := os.MkdirTemp("", "archive-pack-src-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(srcDir)
+
+	_ = os.WriteFile(filepath.Join(srcDir, "main.go"), []byte("package main\nfunc main() {}"), 0644)
+	_ = os.WriteFile(filepath.Join(srcDir, "go.mod"), []byte("module mymod\ngo 1.22"), 0644)
+	_ = os.WriteFile(filepath.Join(srcDir, "ignored.bin"), []byte("binary payload"), 0644) // should be ignored
+
+	tarGzBytes, err := management.PackTarGz(srcDir)
+	if err != nil {
+		t.Fatalf("PackTarGz failed: %v", err)
+	}
+	if len(tarGzBytes) == 0 {
+		t.Fatal("expected non-empty archive bytes")
+	}
+
+	destDir, err := os.MkdirTemp("", "archive-pack-dest-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(destDir)
+
+	err = management.SafeUnpackTarGz(bytes.NewReader(tarGzBytes), destDir, management.DefaultArchiveLimits())
+	if err != nil {
+		t.Fatalf("SafeUnpackTarGz failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(destDir, "main.go")); err != nil {
+		t.Errorf("main.go not found in unpacked archive: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "go.mod")); err != nil {
+		t.Errorf("go.mod not found in unpacked archive: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "ignored.bin")); !os.IsNotExist(err) {
+		t.Errorf("ignored.bin should not have been packed")
+	}
+}

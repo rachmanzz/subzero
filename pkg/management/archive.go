@@ -2,6 +2,7 @@ package management
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -112,4 +113,68 @@ func SafeUnpackTarGz(r io.Reader, destDir string, limits ArchiveLimits) error {
 	}
 
 	return nil
+}
+
+// PackTarGz walks sourceDir and packs all source files (.go, go.mod, go.sum, .md, .txt, .json) into a .tar.gz byte buffer.
+func PackTarGz(sourceDir string) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	cleanSource := filepath.Clean(sourceDir)
+
+	err := filepath.Walk(cleanSource, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(cleanSource, path)
+		if err != nil {
+			return err
+		}
+		slashPath := filepath.ToSlash(relPath)
+
+		ext := strings.ToLower(filepath.Ext(path))
+		base := filepath.Base(path)
+		if ext != ".go" && base != "go.mod" && base != "go.sum" && ext != ".md" && ext != ".txt" && ext != ".json" {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("archive: read file %s: %w", relPath, err)
+		}
+
+		hdr := &tar.Header{
+			Name:    slashPath,
+			Mode:    0644,
+			Size:    int64(len(data)),
+			ModTime: info.ModTime(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("archive: write header %s: %w", relPath, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			return fmt.Errorf("archive: write body %s: %w", relPath, err)
+		}
+		return nil
+	})
+
+	if err != nil {
+		_ = tw.Close()
+		_ = gw.Close()
+		return nil, err
+	}
+
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }

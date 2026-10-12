@@ -152,3 +152,44 @@ Subzero enforces strict multi-tenant resource quotas within the Wazero execution
      * `timeout_ms`: Sets the per-task execution timeout (e.g., `"1000"` for 1s).
      * `fuel_limit`: Sets the operation/fuel quota (e.g., `"500000"`).
 
+---
+
+## 7. Command-Line Interface (`subzero-cli module`)
+
+Tenant engineers and automation pipelines can manage, audit, and push Wasm modules directly via `subzero-cli`:
+
+### 1. Audit a Module Locally
+Audits a Go directory or `.tar.gz` bundle for structure and backdoor vectors before publishing:
+```bash
+subzero-cli module audit ./my-transformer
+# or audit a packed archive
+subzero-cli module audit ./bundle.tar.gz
+```
+
+### 2. Package a Module into `.tar.gz`
+Runs pre-flight AST structure & security audits, then packages allowed source code files into a safe `.tar.gz` archive:
+```bash
+subzero-cli module pack ./my-transformer -o transformer.tar.gz
+```
+
+### 3. Audit, Build & Publish to Server
+Audits locally, packages, uploads to the Management Server, verifies server-side, compiles to `wasip1`, and publishes:
+```bash
+subzero-cli module publish ./my-transformer \
+  --server http://localhost:8080 \
+  --tenant fintech-corp \
+  --name payment-normalizer
+```
+
+### 4. List Registered Modules
+```bash
+subzero-cli module list --server http://localhost:8080 --tenant fintech-corp
+```
+
+### 5. Download Compiled `.wasm` Artifact
+```bash
+subzero-cli module download fintech-corp-payment-normalizer-12345 \
+  --server http://localhost:8080 \
+  -o payment-normalizer.wasm
+```
+
