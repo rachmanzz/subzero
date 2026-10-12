@@ -194,8 +194,9 @@ func main() {
 
 	// 4. Setup Worker Policy and Handler
 	policy := permission.DefaultWorkerPolicy()
-	// Allow any local file prefix
+	// Allow any local file prefix under tmpDir
 	policy.AllowedHostCalls = append(policy.AllowedHostCalls, "storage:get_object")
+	policy.Filesystem.AllowedReadOnlyRoots = append(policy.Filesystem.AllowedReadOnlyRoots, tmpDir)
 
 	resolver := func(target string) ([]byte, error) {
 		if target == "tenant-t1/stream-parser" {

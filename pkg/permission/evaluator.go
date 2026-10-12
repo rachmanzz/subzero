@@ -191,27 +191,37 @@ func Evaluate(policy *WorkerPolicy, req *ModuleRequest) (*EffectivePermissions, 
 	}
 
 	// 3. Evaluate Filesystem Read-Only Paths
-	for _, roPath := range req.Filesystem.ReadOnly {
-		cleanPath, err := sanitizeAndValidatePath(roPath)
-		if err != nil {
-			return nil, err
+	if len(req.Filesystem.ReadOnly) > 0 {
+		for _, roPath := range req.Filesystem.ReadOnly {
+			cleanPath, err := sanitizeAndValidatePath(roPath)
+			if err != nil {
+				return nil, err
+			}
+			if !IsPathUnderRoots(cleanPath, policy.Filesystem.AllowedReadOnlyRoots) {
+				return nil, fmt.Errorf("%w (read-only): %q is not under allowed roots", ErrUnauthorizedPath, roPath)
+			}
+			eff.Filesystem.ReadOnly = append(eff.Filesystem.ReadOnly, cleanPath)
 		}
-		if !IsPathUnderRoots(cleanPath, policy.Filesystem.AllowedReadOnlyRoots) {
-			return nil, fmt.Errorf("%w (read-only): %q is not under allowed roots", ErrUnauthorizedPath, roPath)
-		}
-		eff.Filesystem.ReadOnly = append(eff.Filesystem.ReadOnly, cleanPath)
+	} else {
+		// Inherit policy's allowed read-only roots ceiling
+		eff.Filesystem.ReadOnly = policy.Filesystem.AllowedReadOnlyRoots
 	}
 
 	// 4. Evaluate Filesystem Read-Write Paths
-	for _, rwPath := range req.Filesystem.ReadWrite {
-		cleanPath, err := sanitizeAndValidatePath(rwPath)
-		if err != nil {
-			return nil, err
+	if len(req.Filesystem.ReadWrite) > 0 {
+		for _, rwPath := range req.Filesystem.ReadWrite {
+			cleanPath, err := sanitizeAndValidatePath(rwPath)
+			if err != nil {
+				return nil, err
+			}
+			if !IsPathUnderRoots(cleanPath, policy.Filesystem.AllowedReadWriteRoots) {
+				return nil, fmt.Errorf("%w (read-write): %q is not under allowed roots", ErrUnauthorizedPath, rwPath)
+			}
+			eff.Filesystem.ReadWrite = append(eff.Filesystem.ReadWrite, cleanPath)
 		}
-		if !IsPathUnderRoots(cleanPath, policy.Filesystem.AllowedReadWriteRoots) {
-			return nil, fmt.Errorf("%w (read-write): %q is not under allowed roots", ErrUnauthorizedPath, rwPath)
-		}
-		eff.Filesystem.ReadWrite = append(eff.Filesystem.ReadWrite, cleanPath)
+	} else {
+		// Inherit policy's allowed read-write roots ceiling
+		eff.Filesystem.ReadWrite = policy.Filesystem.AllowedReadWriteRoots
 	}
 
 	// 5. Evaluate S3 Buckets

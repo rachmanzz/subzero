@@ -126,6 +126,18 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 			}
 		}
 
+		// 3b. Enforce Local Filesystem root policy on task.SourceURI
+		if task.SourceURI != "" && (strings.HasPrefix(task.SourceURI, "file://") || strings.HasPrefix(task.SourceURI, "/")) {
+			localPath := strings.TrimPrefix(task.SourceURI, "file://")
+			if len(effective.Filesystem.ReadOnly) > 0 && !permission.IsPathUnderRoots(localPath, effective.Filesystem.ReadOnly) {
+				return &protocol.ResultMessage{
+					TaskID:       task.TaskID,
+					IsSuccess:    false,
+					ErrorMessage: fmt.Sprintf("permission denied: source URI %q not permitted under allowed filesystem roots %v", task.SourceURI, effective.Filesystem.ReadOnly),
+				}, nil
+			}
+		}
+
 		// 4. Enforce File Extension policy on task.SourceURI
 		if task.SourceURI != "" && len(effective.Files.AllowedExtensions) > 0 {
 			hasWildcard := false
@@ -206,6 +218,14 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 					if !permission.IsS3PrefixAllowed(key, effective.S3.AllowedPrefixes) {
 						return nil, fmt.Errorf("%w: key %q not allowed by S3 prefixes %v",
 							permission.ErrUnauthorizedS3Prefix, key, effective.S3.AllowedPrefixes)
+					}
+				}
+				// Validate local filesystem path if key is a file URI
+				if strings.HasPrefix(key, "file://") || strings.HasPrefix(key, "/") {
+					localPath := strings.TrimPrefix(key, "file://")
+					if len(effective.Filesystem.ReadOnly) > 0 && !permission.IsPathUnderRoots(localPath, effective.Filesystem.ReadOnly) {
+						return nil, fmt.Errorf("%w: path %q not allowed under filesystem roots %v",
+							permission.ErrUnauthorizedPath, localPath, effective.Filesystem.ReadOnly)
 					}
 				}
 				return storage.ReadAllStream(c, key)
