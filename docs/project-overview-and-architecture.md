@@ -79,7 +79,7 @@ Subzero addresses these problems through a decoupled, multi-stage architecture g
 
 ## 3. The Orchestration Layer & The `v3/worker` Concurrency Pattern
 
-At the core of the Subzero Supervisor daemon ([`internal/supervisor/dispatcher.go`](../internal/supervisor/dispatcher.go)) lies the **`v3/worker` pattern**, adapted from the high-throughput `fiber-extras` ecosystem.
+At the core of the Subzero Supervisor daemon ([`internal/supervisor/dispatcher.go`](../internal/supervisor/dispatcher.go)) lies the **`v3/worker` pattern**, adapted from the high-throughput `fiber-extras` ecosystem (`github.com/rachmanzz/fiber-extras/v3/worker`).
 
 The `v3/worker` engine solves the challenge of high-burst traffic, panic safety, and parallel task distribution:
 
@@ -101,7 +101,7 @@ Task Ingress ────►│                                                 
 
 ### 3.1 Throttling Semaphore (Preventing Server Overload)
 Without concurrency controls, receiving 100 simultaneous 500 MB transformation requests would trigger 100 parallel workers, exhausting host RAM and causing kernel OOM panics.
-- The `Dispatcher` implements a channel-based semaphore (`sem chan struct{}`) bounded by `Concurrency` (e.g., 16).
+- The `Dispatcher` implements a channel-based semaphore (`sem chan struct{}`) bounded by `Concurrency` (default: 16).
 - Incoming tasks acquire an execution token before execution. If all slots are occupied, subsequent tasks queue gracefully until a running job completes.
 
 ### 3.2 Panic Recovery Guard & Blast-Radius Containment
@@ -110,19 +110,16 @@ User-defined or third-party transformation logic is susceptible to runtime excep
   ```go
   defer func() {
       if r := recover(); r != nil {
-          err = fmt.Errorf("panic recovered during task execution: %v\n%s", r, debug.Stack())
+          err = fmt.Errorf("dispatcher: panic recovered in task %q: %v\nstack: %s", task.TaskID, r, debug.Stack())
       }
   }()
   ```
 - If Tenant Alpha's module encounters a panic, it is safely captured and reported as a failed `ResultMessage`. **The Supervisor daemon never crashes**, and sibling tasks running in other slots continue completely unaffected.
 
 ### 3.3 `SubWorkerPool` Fan-Out (Parallel Multi-Sheet / Large Dataset Processing)
-For massive workbooks or high-volume datasets, the `v3/worker` pattern provides the [`SubWorkerPool`](../internal/supervisor/dispatcher.go) abstraction:
+For massive workbooks or high-volume datasets, the `v3/worker` pattern provides the `SubWorkerPool` abstraction (type-aliased directly to `github.com/rachmanzz/fiber-extras/v3/worker.SubWorkerPool`):
 ```go
-type SubWorkerPool interface {
-    Go(fn func(ctx context.Context) error)
-    Wait() error
-}
+type SubWorkerPool = worker.SubWorkerPool
 ```
 - A parent task can partition a million-row workbook across sheets or row intervals via [`internal/supervisor/chunker.go`](../internal/supervisor/chunker.go).
 - Each chunk executes in parallel across CPU cores.
@@ -140,7 +137,7 @@ To eliminate idle infrastructure costs, workers implement an automated lifecycle
 ```text
 [ DORMANT ] (Worker process does not exist; 0 RAM / 0 CPU consumption)
      │
-     │ 1. Task queued ──► Supervisor triggers Cold-Start (sub-100ms)
+     │ 1. Task queued ──► Supervisor triggers Cold-Start (<100ms)
      ▼
 [ PROVISIONING ] (Worker initializes, opens IPC socket / TCP port)
      │
@@ -165,10 +162,10 @@ To eliminate idle infrastructure costs, workers implement an automated lifecycle
 ### 4.2 Spawner Modes: Native Process vs Containerized
 The Supervisor supports two interchangeable spawner mechanisms ([`internal/supervisor/spawner.go`](../internal/supervisor/spawner.go) and [`internal/supervisor/container_spawner.go`](../internal/supervisor/container_spawner.go)):
 
-| Spawner Mode | Underlying Mechanism | Best For | Cold-Start Overhead |
+| Spawner Mode | Underlying Mechanism | Best For | Cold-Start Performance |
 | :--- | :--- | :--- | :--- |
-| **Native Process (`-spawner=process`)** | Spawns `subzero-worker` executable via `os/exec` over local Unix Domain Socket (`.sock`). | Bare-metal, virtual machines, local edge instances. | **< 15 milliseconds** |
-| **Containerized (`-spawner=container`)** | Spawns worker containers (`subzero-worker:latest`) via Docker / Podman CLI with volume-mounted sockets or TCP ports. | Cloud environments requiring kernel-level namespace/cgroup isolation. | **50 - 150 milliseconds** |
+| **Native Process (`-spawner=process`)** | Spawns `subzero-worker` executable via `os/exec` over local Unix Domain Socket (`.sock`). | Bare-metal, virtual machines, local edge instances. | **< 100 milliseconds** (enforced by benchmark assertions, typically ~10-15ms) |
+| **Containerized (`-spawner=container`)** | Spawns worker containers (`subzero-worker:latest`) via Docker / Podman CLI with volume-mounted sockets or TCP ports. | Cloud environments requiring kernel-level namespace/cgroup isolation. | **On-demand container start** (~100-300ms depending on container runtime) |
 
 ---
 
@@ -178,7 +175,7 @@ When a worker processes data, it does so within an isolated WebAssembly sandbox 
 
 ### 5.1 Strict Memory Limiting & Quota Enforcement
 Tenant code cannot allocate unbounded memory. The runtime enforces strict memory page bounds:
-- Guest modules are initialized with configured maximum memory limits (e.g., 32 MB or 64 MB).
+- Guest modules are initialized with configured maximum memory limits (e.g., 512 pages = 32 MB).
 - If tenant transformation code attempts an infinite loop allocation or encounters an oversized data bomb, the Wazero engine immediately traps the execution:
   ```go
   err == wasm.ErrMemoryLimitExceeded
@@ -186,10 +183,12 @@ Tenant code cannot allocate unbounded memory. The runtime enforces strict memory
 - The memory allocation is rejected, the guest module halts, and the host worker remains stable.
 
 ### 5.2 Controlled Host Calls (`hostcalls`)
-Guest WebAssembly code is decoupled from host system calls. It cannot make arbitrary OS calls. Subzero provides registered host functions via [`internal/runtime/wasm/host_module.go`](../internal/runtime/wasm/host_module.go):
-- `storage:get_object`: Read approved objects from storage within authorized boundaries.
-- `logger:debug`: Emit diagnostic log lines back to the host logger.
-- Standard input/output: Pure streaming via WASI `Stdin` and `Stdout`.
+Guest WebAssembly code is decoupled from host system calls. It cannot make arbitrary OS calls. Subzero registers host functions in the runtime module ([`internal/runtime/wasm/host_module.go`](../internal/runtime/wasm/host_module.go)):
+- `host_storage_get` (Capability: `storage:get_object`): Read approved objects from storage within authorized boundaries.
+- `host_storage_put` (Capability: `storage:put_object`): Write normalized results directly to authorized object stores.
+- `host_log` (Capabilities: `logger:debug`, `logger:info`, `logger:error`): Emit diagnostic log lines back to the host logger.
+- `host_metrics_record` (Capability: `metrics:record`): Record execution metrics.
+- Standard input/output: Direct streaming via WASI `Stdin` and `Stdout`.
 
 ---
 
@@ -203,7 +202,7 @@ Subzero enforces end-to-end security through multiple layers of cryptographic ve
                           ├────────────────────────────────────────────────────────┤
 1. Network Ingress        │ Wire Protocol Framing (HMAC-SHA256 Signature Validation)│
                           ├────────────────────────────────────────────────────────┤
-2. Pre-Compilation        │ AST Security Validator (Rejects unsafe, syscall, net)  │
+2. Pre-Compilation        │ AST Security Validator (Rejects unsafe, syscall, net.Listen)│
                           ├────────────────────────────────────────────────────────┤
 3. Runtime Authorization  │ Two-Sided Capability Negotiation (config.zero ∩ Policy)│
                           ├────────────────────────────────────────────────────────┤
@@ -222,32 +221,75 @@ All inter-process communication (Producer $\rightarrow$ Supervisor $\rightarrow$
 
 ### 6.2 Pre-Compilation AST Security Auditing
 Before any tenant module is compiled by the Management Server ([`cmd/subzero-admin`](../cmd/subzero-admin/main.go)), the source AST is statically inspected ([`pkg/management/validator.go`](../pkg/management/validator.go)):
-- **Forbidden Packages**: Imports of `os/exec`, `syscall`, `unsafe`, and unauthorized runtime internals are blocked.
+- **Forbidden Packages**: Imports of `os/exec`, `syscall`, `unsafe`, `plugin`, and `runtime/cgo` are blocked.
 - **Forbidden Network Calls**: Calls attempting to open listening sockets (`net.Listen`, `net.ListenPacket`) are immediately rejected.
-- **Archive Protection**: The module packager ([`pkg/management/archive.go`](../pkg/management/archive.go)) actively enforces Zip-Slip path sanitization and decompression bomb ratio limits.
+- **Archive Protection**: The module packager ([`pkg/management/archive.go`](../pkg/management/archive.go)) enforces Zip-Slip path sanitization, uncompressed size limits (25 MB cap), and file-count caps (50 files).
 
 ### 6.3 Two-Sided Capability Negotiation
-A tenant's WebAssembly module includes a manifest file, [`config.zero`](../examples/wasm-excel-transformer/config.zero), declaring requested permissions:
+A tenant's WebAssembly module includes a manifest file, [`config.zero`](../examples/wasm-excel-transformer/config.zero), declaring requested permissions. Subzero's manifest parser accepts flat dotted-key YAML or structured JSON:
+
+**Standard Dotted-Key `config.zero`**:
+```yaml
+name: excel-normalizer
+version: 1.0.0
+tenant: tenant-acme
+target: wasip1
+entrypoint: main.go
+memory_limit_pages: 512
+timeout: 10s
+
+# Two-sided Capability Negotiation Permissions (PRD 5.5)
+permissions.host_calls: storage:get_object, logger:debug
+permissions.filesystem.read_only: /tmp/subzero-tenants/in
+permissions.filesystem.read_write: /tmp/subzero-workspace/scratch
+permissions.s3.allowed_prefixes: s3://tenant-acme/
+permissions.files.allowed_extensions: .csv, .xlsx, .json
+```
+
+**JSON Equivalent**:
 ```json
 {
-  "module_name": "acme-excel-normalizer",
-  "requested_permissions": {
-    "storage_read": ["tenant-acme/*"],
-    "storage_write": ["tenant-acme/normalized/*"],
-    "allowed_extensions": [".xlsx", ".csv"]
+  "name": "excel-normalizer",
+  "version": "1.0.0",
+  "tenant": "tenant-acme",
+  "target": "wasip1",
+  "entrypoint": "main.go",
+  "memory_limit_pages": 512,
+  "timeout": "10s",
+  "permissions": {
+    "host_calls": ["storage:get_object", "logger:debug"],
+    "filesystem": {
+      "read_only": ["/tmp/subzero-tenants/in"],
+      "read_write": ["/tmp/subzero-workspace/scratch"]
+    },
+    "s3": { "allowed_prefixes": ["s3://tenant-acme/"] },
+    "files": { "allowed_extensions": [".csv", ".xlsx", ".json"] }
   }
 }
 ```
-The Subzero host enforces a master `WorkerPolicy`:
+
+The Subzero host enforces a master `WorkerPolicy` (loaded from JSON via [`pkg/permission/evaluator.go`](../pkg/permission/evaluator.go)):
 ```json
 {
-  "max_allowed_prefixes": ["tenant-acme/*"],
-  "allow_write": true
+  "allowed_host_calls": ["storage:get_object", "storage:put_object", "logger:debug", "logger:info", "logger:error", "metrics:record"],
+  "filesystem": {
+    "allowed_read_only_roots": ["/tmp/subzero-tenants", "/data/subzero/uploads"],
+    "allowed_read_write_roots": ["/tmp/subzero-workspace"]
+  },
+  "s3": {
+    "allowed_buckets": ["*"],
+    "allowed_prefixes": ["s3://tenant-acme/"],
+    "allowed_operations": ["read", "write"]
+  },
+  "files": {
+    "allowed_extensions": [".csv", ".tsv", ".json", ".txt", ".xlsx", ".xls"],
+    "max_file_size_bytes": 104857600
+  }
 }
 ```
-The [`Evaluator`](../pkg/permission/evaluator.go) calculates the intersection:
+The [`permission.Evaluate`](../pkg/permission/evaluator.go) function calculates the intersection:
 $$\text{Effective Permissions} = \text{ModuleRequest} \cap \text{WorkerPolicy}$$
-If a tenant requests access outside their tenant namespace (e.g., `tenant-other/*`), the evaluator denies execution before the module ever launches.
+If a tenant requests access outside their tenant namespace (e.g., `s3://tenant-other/`), the evaluation fails with an authorization error before the module ever launches.
 
 ### 6.4 How Database Access Works (Zero Credential Exposure)
 A frequent security concern in multi-tenant background computing is: *How does guest code access the database?*
@@ -266,7 +308,7 @@ In Subzero: **Tenant modules NEVER receive direct database connection strings.**
 | Feature | Traditional Worker Queues (Celery, Sidekiq) | AWS Lambda / Serverless Functions | Subzero |
 | :--- | :--- | :--- | :--- |
 | **Idle Infrastructure Cost** | High (Workers run 24/7 consuming RAM/CPU) | Zero (Scale-to-Zero) | **Zero (Native Scale-to-Zero via Watchdog)** |
-| **Cold-Start Latency** | N/A (Always running) | 200 ms - 2,000 ms (VPC / Container initialization) | **< 15 ms (Native) / < 100 ms (Container)** |
+| **Cold-Start Latency** | N/A (Always running) | 200 ms - 2,000 ms (VPC / Container initialization) | **< 100 ms (Native Process) / On-demand container start** |
 | **Payload in Control Plane** | High (Payloads often sent through Redis/RabbitMQ) | Limited (Payload size limits, e.g., 6 MB) | **Zero Payload (Ephemeral Direct S3 Streaming)** |
 | **Tenant Isolation** | None (Tenant code runs directly inside host process) | Container boundary (Strong, but heavyweight) | **WebAssembly (Wazero) Memory Sandbox + Strict AST Audit** |
 | **Large File Handling** | Requires saving files to local worker disk (`/tmp`) | Limited by ephemeral disk quotas | **Zero-Disk Streaming (`io.ReadCloser` direct pipe)** |
