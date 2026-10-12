@@ -27,15 +27,8 @@ func (c *GoCompiler) Name() string {
 	return "go"
 }
 
-// Compile compiles the given Go source code into WebAssembly bytecode using GOOS=wasip1 GOARCH=wasm.
+// Compile compiles single source code bytes into WebAssembly.
 func (c *GoCompiler) Compile(ctx context.Context, sourceCode []byte, opts CompileOptions) (*CompileResult, error) {
-	start := time.Now()
-
-	targetOS := opts.TargetOS
-	if targetOS == "" {
-		targetOS = "wasip1"
-	}
-
 	tmpDir, err := os.MkdirTemp("", "subzero-wasm-build-*")
 	if err != nil {
 		return nil, fmt.Errorf("compiler: failed to create temp dir: %w", err)
@@ -47,18 +40,36 @@ func (c *GoCompiler) Compile(ctx context.Context, sourceCode []byte, opts Compil
 		return nil, fmt.Errorf("compiler: failed to write source file: %w", err)
 	}
 
-	outFile := filepath.Join(tmpDir, "output.wasm")
+	return c.CompileDir(ctx, tmpDir, opts)
+}
+
+// CompileDir compiles a Go package directory into WebAssembly bytecode using GOOS=wasip1 GOARCH=wasm.
+func (c *GoCompiler) CompileDir(ctx context.Context, dir string, opts CompileOptions) (*CompileResult, error) {
+	start := time.Now()
+
+	targetOS := opts.TargetOS
+	if targetOS == "" {
+		targetOS = "wasip1"
+	}
+
+	// Ensure a go.mod exists in the build directory if missing
+	goModPath := filepath.Join(dir, "go.mod")
+	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
+		_ = os.WriteFile(goModPath, []byte("module subzero/userwasm\n\ngo 1.22\n"), 0644)
+	}
+
+	outFile := filepath.Join(dir, "output.wasm")
 
 	args := []string{"build"}
 	if opts.Optimize {
 		args = append(args, "-ldflags", "-s -w")
 	}
-	args = append(args, "-o", outFile, srcFile)
+	args = append(args, "-o", outFile, ".")
 
 	cmd := exec.CommandContext(ctx, c.goBinary, args...)
-	cmd.Dir = tmpDir
+	cmd.Dir = dir
 
-	// Set Wasm compilation environment variables
+	// Enforce Wasm compilation environment variables
 	cmd.Env = append(os.Environ(),
 		"GOOS="+targetOS,
 		"GOARCH=wasm",
@@ -69,7 +80,7 @@ func (c *GoCompiler) Compile(ctx context.Context, sourceCode []byte, opts Compil
 	cmd.Stdout = &logBuf
 	cmd.Stderr = &logBuf
 
-	err = cmd.Run()
+	err := cmd.Run()
 	duration := time.Since(start)
 
 	if err != nil {

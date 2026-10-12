@@ -78,10 +78,22 @@
     </div>
 
     <div class="card">
-      <h2>🚀 Direct Go to Wasm Compiler</h2>
+      <h2>🛡️ Secure Go-to-Wasm Compiler & Ingestion Pipeline</h2>
       <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-        Unggah berkas kode Go (<code>.go</code>) logika transformasi tenant untuk langsung dikompilasi ke WebAssembly bytecode di server.
+        Unggah arsip modul tenant (<code>.tar.gz</code> / <code>.tgz</code>) atau berkas Go (<code>.go</code>). Pipeline akan secara otomatis meng-unpack dengan aman (proteksi Zip-Slip), memverifikasi struktur package <code>main</code> & <code>main()</code>, mengaudit kode dari kemungkinan backdoor / celah keamanan (AST Static Analysis), dan mempublikasikan modul Wasm terverifikasi.
       </p>
+
+      <div style="background: rgba(56, 189, 248, 0.05); border: 1px dashed var(--border); border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-around; text-align: center;">
+        <div><span>1. Safe Unpack</span><br><strong style="color: var(--text);">Zip-Slip & Bomb Safe</strong></div>
+        <div style="color: var(--border);">➔</div>
+        <div><span>2. Structure Check</span><br><strong style="color: var(--text);">pkg main & main()</strong></div>
+        <div style="color: var(--border);">➔</div>
+        <div><span>3. Security Audit</span><br><strong style="color: var(--text);">AST Backdoor Scan</strong></div>
+        <div style="color: var(--border);">➔</div>
+        <div><span>4. Native Build</span><br><strong style="color: var(--text);">wasip1 / wasm</strong></div>
+        <div style="color: var(--border);">➔</div>
+        <div><span>5. Publish</span><br><strong style="color: var(--success);">Verified Safe</strong></div>
+      </div>
 
       <form id="compile-form">
         <div class="form-grid">
@@ -91,7 +103,7 @@
           </div>
           <div>
             <label for="module-name">Module Name *</label>
-            <input type="text" id="module-name" placeholder="e.g. excel-transformer" required />
+            <input type="text" id="module-name" placeholder="e.g. data-normalizer" required />
           </div>
           <div>
             <label for="target-os">Target Wasm Architecture</label>
@@ -103,15 +115,15 @@
         </div>
 
         <div class="file-dropzone" id="dropzone" onclick="document.getElementById('file-input').click()">
-          <input type="file" id="file-input" accept=".go" style="display: none;" onchange="handleFileSelect(this.files)" />
+          <input type="file" id="file-input" accept=".tar.gz,.tgz,.go" style="display: none;" onchange="handleFileSelect(this.files)" />
           <div id="dropzone-text">
-            <span style="font-size: 24px; display: block; margin-bottom: 8px;">📄</span>
-            <strong>Pilih berkas Go (.go)</strong> atau drag-and-drop ke sini
+            <span style="font-size: 24px; display: block; margin-bottom: 8px;">📦</span>
+            <strong>Pilih arsip (.tar.gz, .tgz) atau berkas Go (.go)</strong> atau drag-and-drop ke sini
           </div>
         </div>
 
         <button type="submit" class="btn" id="btn-submit">
-          <span>⚡ Compile to Wasm</span>
+          <span>🛡️ Audit & Publish Wasm</span>
         </button>
       </form>
 
@@ -119,7 +131,7 @@
     </div>
 
     <div class="card">
-      <h2>📦 Registered Wasm Modules</h2>
+      <h2>📦 Published & Verified Wasm Modules</h2>
       <table>
         <thead>
           <tr>
@@ -127,13 +139,14 @@
             <th>Tenant</th>
             <th>Name</th>
             <th>Target</th>
+            <th>Security Status</th>
             <th>Size</th>
             <th>Created</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="modules-table">
-          <tr><td colspan="7" class="empty-state">Loading registered modules...</td></tr>
+          <tr><td colspan="8" class="empty-state">Loading registered modules...</td></tr>
         </tbody>
       </table>
     </div>
@@ -175,20 +188,28 @@
           return;
         }
 
-        tbody.innerHTML = modules.map(m => `
-          <tr>
-            <td><code>${m.id}</code></td>
-            <td><strong>${m.tenant_id}</strong></td>
-            <td>${m.name}</td>
-            <td><span class="badge">${m.target}</span></td>
-            <td>${(m.size / (1024*1024)).toFixed(2)} MB</td>
-            <td style="color: var(--text-muted); font-size: 12px;">${new Date(m.created_at).toLocaleString()}</td>
-            <td>
-              <a href="/api/modules/${m.id}/download" class="btn btn-sm" style="text-decoration: none;" download="${m.name}.wasm">⬇ Wasm</a>
-              <button onclick="deleteModule('${m.id}')" class="btn btn-sm btn-danger">Hapus</button>
-            </td>
-          </tr>
-        `).join('');
+        tbody.innerHTML = modules.map(m => {
+          const isSafe = m.status === 'PUBLISHED' || (m.audit && m.audit.approved);
+          const statusBadge = isSafe 
+            ? `<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: var(--success);" title="Audit passed: pristine Go AST">🛡️ Verified Safe</span>`
+            : `<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--danger);" title="Risk detected">${m.status || 'REJECTED'}</span>`;
+
+          return `
+            <tr>
+              <td><code>${m.id}</code></td>
+              <td><strong>${m.tenant_id}</strong></td>
+              <td>${m.name}</td>
+              <td><span class="badge">${m.target}</span></td>
+              <td>${statusBadge}</td>
+              <td>${(m.size / (1024*1024)).toFixed(2)} MB</td>
+              <td style="color: var(--text-muted); font-size: 12px;">${new Date(m.created_at).toLocaleString()}</td>
+              <td>
+                <a href="/api/modules/${m.id}/download" class="btn btn-sm" style="text-decoration: none;" download="${m.name}.wasm">⬇ Wasm</a>
+                <button onclick="deleteModule('${m.id}')" class="btn btn-sm btn-danger">Hapus</button>
+              </td>
+            </tr>
+          `;
+        }).join('');
       } catch (err) {
         console.error("Gagal memuat modul:", err);
       }
@@ -207,16 +228,19 @@
     document.getElementById('compile-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!selectedFile) {
-        alert("Silakan pilih berkas .go terlebih dahulu!");
+        alert("Silakan pilih berkas .tar.gz atau .go terlebih dahulu!");
         return;
       }
 
       const btn = document.getElementById('btn-submit');
       const consoleBox = document.getElementById('console-output');
       btn.disabled = true;
-      btn.innerHTML = '⏳ Compiling...';
+      btn.innerHTML = '⏳ Auditing & Compiling...';
       consoleBox.style.display = 'block';
-      consoleBox.textContent = `[Subzero Compiler] Memulai kompilasi ${selectedFile.name} ke target Wasm...\n`;
+      consoleBox.textContent = `[Subzero Ingestion] Mengirim ${selectedFile.name} ke pipeline verifikasi...\n` +
+                               `[1/4] Safe Unpack: Memeriksa path traversal & zip bombs...\n` +
+                               `[2/4] Structure Check: Memverifikasi package main & func main()...\n` +
+                               `[3/4] Security Audit: AST Static Analysis untuk backdoor & vector berbahaya...\n`;
 
       const formData = new FormData();
       formData.append('file', selectedFile);
@@ -231,17 +255,35 @@
         });
         const result = await res.json();
 
-        if (res.ok && result.success) {
-          consoleBox.textContent += `[Success] Wasm berhasil dikompilasi! Size: ${(result.size / (1024*1024)).toFixed(2)} MB in ${result.duration}\n${result.compiler_log || ''}`;
+        if (res.ok && result.success && result.published) {
+          consoleBox.textContent += `[4/4] Native Build: Selesai! Modul Wasm berhasil dikompilasi & dipublikasi.\n` +
+                                    `------------------------------------------------------------\n` +
+                                    `STATUS: 🛡️ PUBLISHED & VERIFIED SAFE\n` +
+                                    `Module ID : ${result.module_id}\n` +
+                                    `Wasm Size : ${(result.size / (1024*1024)).toFixed(2)} MB\n` +
+                                    `Duration  : ${result.duration}\n` +
+                                    `Audit     : ${result.audit ? result.audit.scanned_files + ' file(s) scanned, risk score ' + result.audit.risk_score : 'Clean'}\n` +
+                                    (result.compiler_log ? `Build Log :\n${result.compiler_log}\n` : '');
           loadModules();
         } else {
-          consoleBox.textContent += `[Error] Kompilasi gagal: ${result.error || result.compiler_log}\n`;
+          consoleBox.textContent += `------------------------------------------------------------\n` +
+                                    `STATUS: ⛔ REJECTED AT STAGE [${result.stage || 'UNKNOWN'}]\n` +
+                                    `Error: ${result.error || 'Security or verification check failed'}\n`;
+          if (result.violations && result.violations.length > 0) {
+            consoleBox.textContent += `Security Violations Ditemukan (${result.violations.length}):\n`;
+            result.violations.forEach(v => {
+              consoleBox.textContent += `  🚨 [${v.severity}] ${v.rule} di ${v.file}:${v.line} -> ${v.message}\n`;
+            });
+          }
+          if (result.compiler_log) {
+            consoleBox.textContent += `Compiler Output:\n${result.compiler_log}\n`;
+          }
         }
       } catch (err) {
         consoleBox.textContent += `[Error] Request gagal: ${err}\n`;
       } finally {
         btn.disabled = false;
-        btn.innerHTML = '⚡ Compile to Wasm';
+        btn.innerHTML = '🛡️ Audit & Publish Wasm';
       }
     });
 

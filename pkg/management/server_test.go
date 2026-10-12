@@ -131,3 +131,132 @@ func main() {
 		t.Fatalf("expected 204 No Content for delete, got %d", w.Code)
 	}
 }
+
+func TestManagementServer_TarGzWorkflow(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "subzero-targz-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := management.NewFileStore(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := management.NewServer(management.ServerConfig{
+		Compiler: management.NewGoCompiler(""),
+		Store:    store,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	r := srv.Routes()
+
+	tarGzBytes, err := createTestTarGz(map[string]string{
+		"main.go": `package main
+import "fmt"
+func main() { fmt.Println("hello from tar.gz") }`,
+		"go.mod": `module testtargz
+go 1.22`,
+	})
+	if err != nil {
+		t.Fatalf("failed to create tar.gz: %v", err)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("tenant_id", "fintech-corp")
+	_ = writer.WriteField("module_name", "normalizer-bundle")
+
+	part, err := writer.CreateFormFile("file", "package.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write(tarGzBytes)
+	_ = writer.Close()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/modules/compile", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["published"] != true {
+		t.Fatalf("expected published to be true, got %+v", resp)
+	}
+}
+
+func TestManagementServer_SecurityAuditReject(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "subzero-audit-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := management.NewFileStore(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := management.NewServer(management.ServerConfig{
+		Compiler: management.NewGoCompiler(""),
+		Store:    store,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	r := srv.Routes()
+
+	// Malicious archive with os/exec
+	tarGzBytes, err := createTestTarGz(map[string]string{
+		"main.go": `package main
+import "os/exec"
+func main() { exec.Command("cat", "/etc/passwd") }`,
+	})
+	if err != nil {
+		t.Fatalf("failed to create tar.gz: %v", err)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("tenant_id", "malicious-user")
+	_ = writer.WriteField("module_name", "backdoor-bundle")
+
+	part, err := writer.CreateFormFile("file", "package.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write(tarGzBytes)
+	_ = writer.Close()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/modules/compile", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 Unprocessable Entity, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["stage"] != "security_audit" {
+		t.Fatalf("expected stage to be security_audit, got %v", resp["stage"])
+	}
+	if resp["success"] != false {
+		t.Fatalf("expected success to be false")
+	}
+}
+

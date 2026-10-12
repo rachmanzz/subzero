@@ -6,15 +6,17 @@ import (
 
 // WasmModule represents a compiled WebAssembly artifact stored in Subzero.
 type WasmModule struct {
-	ID          string    `json:"id"`
-	TenantID    string    `json:"tenant_id"`
-	Name        string    `json:"name"`
-	Target      string    `json:"target"` // e.g. "wasip1", "js"
-	Size        int64     `json:"size"`
-	WasmPath    string    `json:"wasm_path"`
-	SourcePath  string    `json:"source_path,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	CompileTime string    `json:"compile_time"`
+	ID          string       `json:"id"`
+	TenantID    string       `json:"tenant_id"`
+	Name        string       `json:"name"`
+	Target      string       `json:"target"` // e.g. "wasip1", "js"
+	Size        int64        `json:"size"`
+	WasmPath    string       `json:"wasm_path"`
+	SourcePath  string       `json:"source_path,omitempty"`
+	Status      string       `json:"status"` // e.g. "PUBLISHED", "REJECTED"
+	Audit       *AuditReport `json:"audit,omitempty"`
+	CreatedAt   time.Time    `json:"created_at"`
+	CompileTime string       `json:"compile_time"`
 }
 
 // CompileOptions defines compiler flags and parameters.
@@ -33,5 +35,6 @@ type CompileResult struct {
 	Size        int64         `json:"size"`
 	Duration    time.Duration `json:"duration"`
 	CompilerLog string        `json:"compiler_log"`
+	Audit       *AuditReport  `json:"audit,omitempty"`
 	WasmBytes   []byte        `json:"-"`
 }

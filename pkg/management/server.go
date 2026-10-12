@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -123,17 +124,97 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	if !strings.HasSuffix(header.Filename, ".go") {
-		http.Error(w, "file must be a .go source file", http.StatusBadRequest)
+	filename := strings.ToLower(header.Filename)
+	isTarGz := strings.HasSuffix(filename, ".tar.gz") || strings.HasSuffix(filename, ".tgz")
+	isGo := strings.HasSuffix(filename, ".go")
+
+	if !isTarGz && !isGo {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"error":   "uploaded file must be a .tar.gz archive or a .go source file",
+		})
 		return
 	}
 
-	sourceBytes, err := io.ReadAll(file)
+	// Create isolated workspace for unpack and verification
+	unpackDir, err := os.MkdirTemp("", "subzero-pkg-verify-*")
 	if err != nil {
-		http.Error(w, "failed to read uploaded file", http.StatusInternalServerError)
+		http.Error(w, "failed to create workspace: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(unpackDir)
+
+	var sourceBytes []byte
+	if isTarGz {
+		if err := SafeUnpackTarGz(file, unpackDir, DefaultArchiveLimits()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": false,
+				"stage":   "archive_unpack",
+				"error":   "failed to unpack archive safely: " + err.Error(),
+			})
+			return
+		}
+	} else {
+		// Single .go file
+		sourceBytes, err = io.ReadAll(file)
+		if err != nil {
+			http.Error(w, "failed to read file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := os.WriteFile(filepath.Join(unpackDir, "main.go"), sourceBytes, 0644); err != nil {
+			http.Error(w, "failed to write main.go: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// 1. Structure Verification: Ensure package main with main() exists
+	mainFile, err := VerifyStructure(unpackDir)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"stage":   "structure_verification",
+			"error":   err.Error(),
+		})
 		return
 	}
 
+	// If sourceBytes wasn't captured from single file, capture main.go for store
+	if len(sourceBytes) == 0 && mainFile != "" {
+		sourceBytes, _ = os.ReadFile(mainFile)
+	}
+
+	// 2. Security & Backdoor Static Analysis (AST scan)
+	auditReport, err := AuditSecurity(unpackDir)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"stage":   "security_audit",
+			"error":   "security static analysis error: " + err.Error(),
+		})
+		return
+	}
+
+	if !auditReport.Approved {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"stage":   "security_audit",
+			"error":   "Security validation failed: potential backdoor or forbidden imports detected",
+			"audit":   auditReport,
+		})
+		return
+	}
+
+	// 3. Compilation Phase
 	tenantID := r.FormValue("tenant_id")
 	if tenantID == "" {
 		tenantID = "default"
@@ -141,7 +222,11 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 
 	moduleName := r.FormValue("module_name")
 	if moduleName == "" {
-		moduleName = strings.TrimSuffix(header.Filename, ".go")
+		cleanBase := filepath.Base(header.Filename)
+		cleanBase = strings.TrimSuffix(cleanBase, ".tar.gz")
+		cleanBase = strings.TrimSuffix(cleanBase, ".tgz")
+		cleanBase = strings.TrimSuffix(cleanBase, ".go")
+		moduleName = cleanBase
 	}
 
 	targetOS := r.FormValue("target_os")
@@ -156,39 +241,51 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 		Optimize:   true,
 	}
 
-	compileRes, err := s.cfg.Compiler.Compile(r.Context(), sourceBytes, opts)
+	var compileRes *CompileResult
+	if goComp, ok := s.cfg.Compiler.(*GoCompiler); ok {
+		compileRes, err = goComp.CompileDir(r.Context(), unpackDir, opts)
+	} else {
+		compileRes, err = s.cfg.Compiler.Compile(r.Context(), sourceBytes, opts)
+	}
+
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"success":      false,
+			"stage":        "compilation",
 			"error":        err.Error(),
 			"compiler_log": compileRes.CompilerLog,
 		})
 		return
 	}
 
+	// 4. Publication Phase
 	moduleID := fmt.Sprintf("%s-%s-%d", tenantID, moduleName, time.Now().Unix())
 	mod := &WasmModule{
 		ID:          moduleID,
 		TenantID:    tenantID,
 		Name:        moduleName,
 		Target:      targetOS,
+		Status:      "PUBLISHED",
+		Audit:       auditReport,
 		CreatedAt:   time.Now(),
 		CompileTime: compileRes.Duration.String(),
 	}
 
 	if err := s.cfg.Store.Save(r.Context(), mod, compileRes.WasmBytes, sourceBytes); err != nil {
-		http.Error(w, "failed to save compiled wasm artifact: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to publish wasm artifact: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success":      true,
+		"published":    true,
 		"module_id":    moduleID,
 		"size":         compileRes.Size,
 		"duration":     compileRes.Duration.String(),
+		"audit":        auditReport,
 		"compiler_log": compileRes.CompilerLog,
 	})
 }
