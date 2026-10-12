@@ -3,8 +3,14 @@ package transport_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,7 +22,7 @@ import (
 	_ "github.com/rachmanzz/subzero/pkg/transport/http"
 	_ "github.com/rachmanzz/subzero/pkg/transport/inproc"
 	_ "github.com/rachmanzz/subzero/pkg/transport/ipc"
-	_ "github.com/rachmanzz/subzero/pkg/transport/tcp"
+	"github.com/rachmanzz/subzero/pkg/transport/tcp"
 )
 
 func runTransportTest(t *testing.T, scheme, endpoint string) {
@@ -125,3 +131,183 @@ func TestHTTPTransport(t *testing.T) {
 
 	runTransportTest(t, "http", addr)
 }
+
+func TestTCPTransport_mTLS(t *testing.T) {
+	// Generate self-signed CA and client/server certificates for testing
+	caCertPEM, caKeyPEM, err := generateTestCA()
+	if err != nil {
+		t.Fatalf("failed to generate CA: %v", err)
+	}
+
+	serverCertPEM, serverKeyPEM, err := generateTestCert(caCertPEM, caKeyPEM, "127.0.0.1", true)
+	if err != nil {
+		t.Fatalf("failed to generate server cert: %v", err)
+	}
+
+	clientCertPEM, clientKeyPEM, err := generateTestCert(caCertPEM, caKeyPEM, "client-node", false)
+	if err != nil {
+		t.Fatalf("failed to generate client cert: %v", err)
+	}
+
+	serverTLS := &tcp.TLSConfig{
+		CertPEM: serverCertPEM,
+		KeyPEM:  serverKeyPEM,
+		CAPEM:   caCertPEM,
+	}
+
+	clientTLS := &tcp.TLSConfig{
+		CertPEM:    clientCertPEM,
+		KeyPEM:     clientKeyPEM,
+		CAPEM:      caCertPEM,
+		ServerName: "127.0.0.1",
+	}
+
+	serverTransport := tcp.New(serverTLS)
+	clientTransport := tcp.New(clientTLS)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	listener, err := serverTransport.Listen(ctx, "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("mTLS listen failed: %v", err)
+	}
+	defer listener.Close()
+
+	endpoint := listener.Addr().String()
+	secretKey := []byte("mtls-secret-key-32-bytes-subzero")
+	testPayload := []byte("secure mTLS message payload")
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer conn.Close()
+
+		received, err := protocol.ReadFrame(conn, secretKey, 0)
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+
+		_ = protocol.WriteFrame(conn, append([]byte("mtls-ack: "), received...), secretKey)
+		serverErrCh <- nil
+	}()
+
+	clientConn, err := clientTransport.Dial(ctx, endpoint)
+	if err != nil {
+		t.Fatalf("mTLS dial failed: %v", err)
+	}
+	defer clientConn.Close()
+
+	if err := protocol.WriteFrame(clientConn, testPayload, secretKey); err != nil {
+		t.Fatalf("mTLS write frame failed: %v", err)
+	}
+
+	reply, err := protocol.ReadFrame(clientConn, secretKey, 0)
+	if err != nil {
+		t.Fatalf("mTLS read frame failed: %v", err)
+	}
+
+	expectedReply := append([]byte("mtls-ack: "), testPayload...)
+	if !bytes.Equal(reply, expectedReply) {
+		t.Fatalf("unexpected mTLS reply: %q", reply)
+	}
+
+	if err := <-serverErrCh; err != nil {
+		t.Fatalf("server mTLS error: %v", err)
+	}
+
+	// Verify that unauthenticated client (no client cert) is rejected by mTLS server
+	unauthTransport := tcp.New(&tcp.TLSConfig{
+		CAPEM:      caCertPEM,
+		ServerName: "127.0.0.1",
+	})
+	unauthConn, err := unauthTransport.Dial(ctx, endpoint)
+	if err == nil {
+		// Attempting handshake/read should fail
+		_ = protocol.WriteFrame(unauthConn, testPayload, secretKey)
+		_, readErr := protocol.ReadFrame(unauthConn, secretKey, 0)
+		unauthConn.Close()
+		if readErr == nil {
+			t.Fatal("expected unauthenticated client connection to fail on mTLS listener")
+		}
+	}
+}
+
+func generateTestCA() ([]byte, []byte, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: "Subzero Test CA",
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+	return certPEM, keyPEM, nil
+}
+
+func generateTestCert(caCertPEM, caKeyPEM []byte, commonName string, isServer bool) ([]byte, []byte, error) {
+	caCertBlock, _ := pem.Decode(caCertPEM)
+	caKeyBlock, _ := pem.Decode(caKeyPEM)
+
+	caCert, err := x509.ParseCertificate(caCertBlock.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	caKey, err := x509.ParsePKCS1PrivateKey(caKeyBlock.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName: commonName,
+		},
+		NotBefore: time.Now().Add(-1 * time.Hour),
+		NotAfter:  time.Now().Add(24 * time.Hour),
+	}
+
+	if isServer {
+		tmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
+		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	} else {
+		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &priv.PublicKey, caKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+	return certPEM, keyPEM, nil
+}
+
+
