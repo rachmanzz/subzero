@@ -1,0 +1,38 @@
+# Knowledge and local docs
+.knowladges/
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binary, output & coverage
+*.test
+*.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Environment & local credentials
+.env
+*.local
+*.pem
+*.key
+*.crt
+
+# OS & Editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Socket and temporary files
+*.sock
+tmp/
