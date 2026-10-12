@@ -196,7 +196,7 @@ func Evaluate(policy *WorkerPolicy, req *ModuleRequest) (*EffectivePermissions, 
 		if err != nil {
 			return nil, err
 		}
-		if !isPathUnderRoots(cleanPath, policy.Filesystem.AllowedReadOnlyRoots) {
+		if !IsPathUnderRoots(cleanPath, policy.Filesystem.AllowedReadOnlyRoots) {
 			return nil, fmt.Errorf("%w (read-only): %q is not under allowed roots", ErrUnauthorizedPath, roPath)
 		}
 		eff.Filesystem.ReadOnly = append(eff.Filesystem.ReadOnly, cleanPath)
@@ -208,7 +208,7 @@ func Evaluate(policy *WorkerPolicy, req *ModuleRequest) (*EffectivePermissions, 
 		if err != nil {
 			return nil, err
 		}
-		if !isPathUnderRoots(cleanPath, policy.Filesystem.AllowedReadWriteRoots) {
+		if !IsPathUnderRoots(cleanPath, policy.Filesystem.AllowedReadWriteRoots) {
 			return nil, fmt.Errorf("%w (read-write): %q is not under allowed roots", ErrUnauthorizedPath, rwPath)
 		}
 		eff.Filesystem.ReadWrite = append(eff.Filesystem.ReadWrite, cleanPath)
@@ -234,7 +234,7 @@ func Evaluate(policy *WorkerPolicy, req *ModuleRequest) (*EffectivePermissions, 
 		if cleanPrefix == "" {
 			continue
 		}
-		if !wildcardPrefixes && !isS3PrefixAllowed(cleanPrefix, policy.S3.AllowedPrefixes) {
+		if !wildcardPrefixes && !IsS3PrefixAllowed(cleanPrefix, policy.S3.AllowedPrefixes) {
 			return nil, fmt.Errorf("%w: %q", ErrUnauthorizedS3Prefix, reqPrefix)
 		}
 		eff.S3.AllowedPrefixes = append(eff.S3.AllowedPrefixes, cleanPrefix)
@@ -316,7 +316,8 @@ func sanitizeAndValidatePath(p string) (string, error) {
 	return clean, nil
 }
 
-func isPathUnderRoots(path string, roots []string) bool {
+// IsPathUnderRoots checks whether a path resides inside any of the allowed root directories.
+func IsPathUnderRoots(path string, roots []string) bool {
 	if len(roots) == 0 {
 		return false
 	}
@@ -332,7 +333,8 @@ func isPathUnderRoots(path string, roots []string) bool {
 	return false
 }
 
-func isS3PrefixAllowed(prefix string, allowedPrefixes []string) bool {
+// IsS3PrefixAllowed checks whether an S3 target URI or prefix matches any of the allowed policy prefixes.
+func IsS3PrefixAllowed(prefix string, allowedPrefixes []string) bool {
 	for _, allowed := range allowedPrefixes {
 		cleanAllowed := strings.TrimSpace(allowed)
 		if cleanAllowed == "*" || cleanAllowed == "s3://" {

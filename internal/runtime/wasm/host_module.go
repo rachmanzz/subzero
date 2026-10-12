@@ -39,37 +39,42 @@ func GetHostContext(ctx context.Context) *HostContext {
 func RegisterHostModule(ctx context.Context, rt wazero.Runtime) error {
 	builder := rt.NewHostModuleBuilder("subzero_host")
 
-	// 1. host_storage_get(keyPtr, keyLen, outPtr, outMaxLen uint32) (bytesRead uint32, errCode uint32)
+	// 1. host_storage_get(keyPtr, keyLen, outPtr, outMaxLen, outReadPtr uint32) (errCode uint32)
 	builder.NewFunctionBuilder().
-		WithFunc(func(ctx context.Context, m api.Module, keyPtr, keyLen, outPtr, outMaxLen uint32) (uint32, uint32) {
+		WithFunc(func(ctx context.Context, m api.Module, keyPtr, keyLen, outPtr, outMaxLen, outReadPtr uint32) uint32 {
 			hc := GetHostContext(ctx)
 			if hc == nil || hc.Permissions == nil || !hc.Permissions.HostCalls["storage:get_object"] {
-				return 0, 1 // Permission Denied
+				return 1 // Permission Denied
 			}
 			if hc.StorageGet == nil {
-				return 0, 4 // Internal error / not configured
+				return 4 // Internal error / not configured
 			}
 
 			mem := m.Memory()
 			keyBytes, ok := mem.Read(keyPtr, keyLen)
 			if !ok {
-				return 0, 4 // Invalid memory address
+				return 4 // Invalid memory address
 			}
 
 			data, err := hc.StorageGet(ctx, string(keyBytes))
 			if err != nil {
-				return 0, 2 // Not found or fetch failed
+				return 2 // Not found or fetch failed
+			}
+
+			// Write actual data length to outReadPtr
+			if outReadPtr != 0 {
+				mem.WriteUint32Le(outReadPtr, uint32(len(data)))
 			}
 
 			if uint32(len(data)) > outMaxLen {
-				return uint32(len(data)), 3 // Buffer too small, returns needed size
+				return 3 // Buffer too small
 			}
 
 			if !mem.Write(outPtr, data) {
-				return 0, 4 // Memory write failed
+				return 4 // Memory write failed
 			}
 
-			return uint32(len(data)), 0 // Success
+			return 0 // Success
 		}).
 		Export("host_storage_get")
 

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/rachmanzz/subzero/internal/runtime/wasm"
+	_ "github.com/rachmanzz/subzero/internal/storage/local"
+	_ "github.com/rachmanzz/subzero/internal/storage/s3"
 	"github.com/rachmanzz/subzero/internal/worker"
 	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/rachmanzz/subzero/pkg/protocol"

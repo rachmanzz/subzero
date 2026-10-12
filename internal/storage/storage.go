@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,3 +51,35 @@ func Get(scheme string) (Driver, error) {
 	}
 	return d, nil
 }
+
+// ResolveDriver extracts the scheme from a storage URI or reference (e.g. "s3://bucket/key" -> "s3",
+// "file:///tmp/doc" -> "file", "/tmp/doc" -> "file") and returns the matching Driver.
+func ResolveDriver(storageRef string) (Driver, error) {
+	scheme := "file"
+	if idx := strings.Index(storageRef, "://"); idx != -1 {
+		scheme = storageRef[:idx]
+	}
+
+	return Get(scheme)
+}
+
+// OpenStream resolves the storage driver and opens a direct streaming reader for the given storageRef.
+// Callers are responsible for closing the returned io.ReadCloser.
+func OpenStream(ctx context.Context, storageRef string) (io.ReadCloser, error) {
+	d, err := ResolveDriver(storageRef)
+	if err != nil {
+		return nil, err
+	}
+	return d.StreamRead(ctx, storageRef)
+}
+
+// ReadAllStream reads the entire stream from storageRef directly into memory without saving to a temporary disk file.
+func ReadAllStream(ctx context.Context, storageRef string) ([]byte, error) {
+	rc, err := OpenStream(ctx, storageRef)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+

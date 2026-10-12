@@ -8,7 +8,7 @@ import (
 )
 
 //go:wasmimport subzero_host host_storage_get
-func hostStorageGet(keyPtr, keyLen, outPtr, outMaxLen uint32) (uint32, uint32)
+func hostStorageGet(keyPtr, keyLen, outPtr, outMaxLen, outReadPtr uint32) uint32
 
 //go:wasmimport subzero_host host_storage_put
 func hostStoragePut(keyPtr, keyLen, valPtr, valLen uint32) uint32
@@ -30,7 +30,10 @@ func callHostStorageGet(key string) ([]byte, error) {
 	// Initial buffer: 64 KB
 	buf := make([]byte, 65536)
 	bufPtr := uint32(uintptr(unsafe.Pointer(&buf[0])))
-	bytesRead, errCode := hostStorageGet(keyPtr, keyLen, bufPtr, uint32(len(buf)))
+	var bytesRead uint32
+	readPtr := uint32(uintptr(unsafe.Pointer(&bytesRead)))
+
+	errCode := hostStorageGet(keyPtr, keyLen, bufPtr, uint32(len(buf)), readPtr)
 	if errCode == 1 {
 		return nil, ErrPermissionDenied
 	}
@@ -41,7 +44,7 @@ func callHostStorageGet(key string) ([]byte, error) {
 		// Buffer was too small; bytesRead indicates needed size
 		buf = make([]byte, bytesRead)
 		bufPtr = uint32(uintptr(unsafe.Pointer(&buf[0])))
-		bytesRead, errCode = hostStorageGet(keyPtr, keyLen, bufPtr, uint32(len(buf)))
+		errCode = hostStorageGet(keyPtr, keyLen, bufPtr, uint32(len(buf)), readPtr)
 		if errCode != 0 {
 			return nil, fmt.Errorf("hostcall storage_get retry failed with code %d", errCode)
 		}

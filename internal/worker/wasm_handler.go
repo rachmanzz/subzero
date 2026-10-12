@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/rachmanzz/subzero/internal/runtime/wasm"
+	"github.com/rachmanzz/subzero/internal/storage"
+	_ "github.com/rachmanzz/subzero/internal/storage/local"
 	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 	"github.com/rachmanzz/subzero/pkg/sdk"
@@ -196,11 +198,43 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 			}
 		}
 
+		storageGet := cfg.StorageGet
+		if storageGet == nil {
+			storageGet = func(c context.Context, key string) ([]byte, error) {
+				// Validate S3 prefix if key is an S3 URI
+				if strings.HasPrefix(key, "s3://") {
+					if !permission.IsS3PrefixAllowed(key, effective.S3.AllowedPrefixes) {
+						return nil, fmt.Errorf("%w: key %q not allowed by S3 prefixes %v",
+							permission.ErrUnauthorizedS3Prefix, key, effective.S3.AllowedPrefixes)
+					}
+				}
+				return storage.ReadAllStream(c, key)
+			}
+		}
+
+		storagePut := cfg.StoragePut
+		if storagePut == nil {
+			storagePut = func(c context.Context, key string, data []byte) error {
+				// Validate S3 prefix if key is an S3 URI
+				if strings.HasPrefix(key, "s3://") {
+					if !permission.IsS3PrefixAllowed(key, effective.S3.AllowedPrefixes) {
+						return fmt.Errorf("%w: key %q not allowed by S3 prefixes %v",
+							permission.ErrUnauthorizedS3Prefix, key, effective.S3.AllowedPrefixes)
+					}
+				}
+				d, err := storage.ResolveDriver(key)
+				if err != nil {
+					return err
+				}
+				return d.PutObject(c, key, strings.NewReader(string(data)), int64(len(data)))
+			}
+		}
+
 		// Attach HostContext with effective permissions and callbacks
 		hostCtx := &wasm.HostContext{
 			Permissions:   effective,
-			StorageGet:    cfg.StorageGet,
-			StoragePut:    cfg.StoragePut,
+			StorageGet:    storageGet,
+			StoragePut:    storagePut,
 			LogHandler:    cfg.LogHandler,
 			MetricHandler: cfg.MetricHandler,
 		}

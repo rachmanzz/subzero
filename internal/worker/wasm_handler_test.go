@@ -2,12 +2,14 @@ package worker_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/rachmanzz/subzero/internal/runtime/wasm"
 	"github.com/rachmanzz/subzero/internal/worker"
 	"github.com/rachmanzz/subzero/pkg/management"
+	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 )
 
@@ -136,4 +138,107 @@ func TestWorkerWasmHandler_PermissionPolicyEnforcement(t *testing.T) {
 		t.Fatalf("expected task to fail due to forbidden file extension .exe")
 	}
 }
+
+func TestWorkerWasmHandler_DirectStorageStreaming(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Prepare test file content in local storage
+	tmpDir := t.TempDir()
+	testFilePath := tmpDir + "/input.csv"
+	csvContent := []byte("id,name,role\n1,alice,admin\n2,bob,operator\n3,charlie,viewer\n")
+	if err := os.WriteFile(testFilePath, csvContent, 0644); err != nil {
+		t.Fatalf("write test file failed: %v", err)
+	}
+
+	// 2. Compile guest module that calls sdk.GetStorageBlob
+	goSource := `package main
+import (
+	"bytes"
+	"fmt"
+	"github.com/rachmanzz/subzero/pkg/sdk"
+)
+func main() {
+	req, err := sdk.ReadRequestFromEnv()
+	if err != nil {
+		fmt.Printf("{\"is_success\":false,\"error_message\":%q}\n", err.Error())
+		return
+	}
+	blob, err := sdk.GetStorageBlob(req.SourceURI)
+	if err != nil {
+		fmt.Printf("{\"is_success\":false,\"error_message\":%q}\n", err.Error())
+		return
+	}
+	lines := bytes.Count(blob, []byte("\n"))
+	fmt.Printf("{\"is_success\":true,\"processed_rows\":%d}\n", lines)
+}
+`
+	compiler := management.NewGoCompiler("")
+	compileRes, err := compiler.Compile(ctx, []byte(goSource), management.CompileOptions{
+		TenantID:   "tenant-t1",
+		ModuleName: "stream-parser",
+		TargetOS:   "wasip1",
+		Optimize:   true,
+	})
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	// 3. Initialize Engine
+	cfg := wasm.DefaultConfig()
+	cfg.DefaultTimeout = 30 * time.Second
+	engine, err := wasm.NewEngine(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	defer engine.Close(ctx)
+
+	// 4. Setup Worker Policy and Handler
+	policy := permission.DefaultWorkerPolicy()
+	// Allow any local file prefix
+	policy.AllowedHostCalls = append(policy.AllowedHostCalls, "storage:get_object")
+
+	resolver := func(target string) ([]byte, error) {
+		if target == "tenant-t1/stream-parser" {
+			return compileRes.WasmBytes, nil
+		}
+		return nil, worker.ErrModuleNotFound
+	}
+
+	moduleReqResolver := func(target string) (*permission.ModuleRequest, error) {
+		return &permission.ModuleRequest{
+			HostCalls: []string{"storage:get_object"},
+			Files: permission.RequestFiles{
+				AllowedExtensions: []string{".csv"},
+				MaxFileSizeMB:     10,
+			},
+		}, nil
+	}
+
+	handler := worker.NewWasmHandlerWithConfig(worker.WasmHandlerConfig{
+		Engine:                engine,
+		Resolver:              resolver,
+		WorkerPolicy:          &policy,
+		ModuleRequestResolver: moduleReqResolver,
+	})
+
+	task := &protocol.TaskMessage{
+		TaskID:       "task-stream-001",
+		TenantID:     "tenant-t1",
+		ActionTarget: "tenant-t1/stream-parser",
+		SourceURI:    "file://" + testFilePath,
+	}
+
+	result, err := handler(ctx, task)
+	if err != nil {
+		t.Fatalf("handler execution error: %v", err)
+	}
+
+	if !result.IsSuccess {
+		t.Fatalf("expected successful execution, got error: %s", result.ErrorMessage)
+	}
+	if result.ProcessedRows != 4 {
+		t.Fatalf("expected 4 rows parsed from stream, got: %d", result.ProcessedRows)
+	}
+}
+
 

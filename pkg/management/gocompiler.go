@@ -55,7 +55,35 @@ func (c *GoCompiler) CompileDir(ctx context.Context, dir string, opts CompileOpt
 	// Ensure a go.mod exists in the build directory if missing
 	goModPath := filepath.Join(dir, "go.mod")
 	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
-		_ = os.WriteFile(goModPath, []byte("module subzero/userwasm\n\ngo 1.22\n"), 0644)
+		cwd, _ := os.Getwd()
+		// Walk up to find repo root containing go.mod with module github.com/rachmanzz/subzero
+		repoRoot := ""
+		checkDir := cwd
+		for i := 0; i < 5; i++ {
+			if data, err := os.ReadFile(filepath.Join(checkDir, "go.mod")); err == nil {
+				if bytes.Contains(data, []byte("module github.com/rachmanzz/subzero")) {
+					repoRoot = checkDir
+					break
+				}
+			}
+			parent := filepath.Dir(checkDir)
+			if parent == checkDir {
+				break
+			}
+			checkDir = parent
+		}
+
+		goModContent := "module subzero/userwasm\n\ngo 1.22\n"
+		if repoRoot != "" {
+			goModContent += fmt.Sprintf("\nreplace github.com/rachmanzz/subzero => %s\nrequire github.com/rachmanzz/subzero v0.0.0\n", repoRoot)
+		}
+		_ = os.WriteFile(goModPath, []byte(goModContent), 0644)
+
+		if repoRoot != "" {
+			tidyCmd := exec.CommandContext(ctx, c.goBinary, "mod", "tidy")
+			tidyCmd.Dir = dir
+			_ = tidyCmd.Run()
+		}
 	}
 
 	outFile := filepath.Join(dir, "output.wasm")

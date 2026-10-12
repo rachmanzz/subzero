@@ -55,6 +55,16 @@ func TestLocalStorageDriver(t *testing.T) {
 		t.Fatalf("content mismatch: expected %q, got %q", string(content), string(readData))
 	}
 
+	// Test ReadAllStream helper
+	fullURI := "file://" + filepath.Join(tmpDir, "tenant1/report.csv")
+	helperBytes, err := storage.ReadAllStream(ctx, fullURI)
+	if err != nil {
+		t.Fatalf("ReadAllStream failed: %v", err)
+	}
+	if !bytes.Equal(helperBytes, content) {
+		t.Fatalf("ReadAllStream mismatch: expected %q, got %q", string(content), string(helperBytes))
+	}
+
 	// Delete
 	if err := d.DeleteObject(ctx, "tenant1/report.csv"); err != nil {
 		t.Fatalf("DeleteObject failed: %v", err)
