@@ -23,6 +23,13 @@ const (
 	StateRunning      WorkerState = "RUNNING"
 )
 
+// WorkerSpawner defines the interface for on-demand worker lifecycle management.
+type WorkerSpawner interface {
+	State() WorkerState
+	EnsureRunning(ctx context.Context) error
+	Stop()
+}
+
 var (
 	ErrSpawnerStopped = errors.New("spawner: supervisor is stopped")
 	ErrColdStartTimeout = errors.New("spawner: cold-start worker failed to become ready in time")

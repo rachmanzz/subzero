@@ -25,12 +25,15 @@ func main() {
 	endpoint := flag.String("endpoint", "/tmp/subzero-supervisor.sock", "Listen socket path or address")
 	workerBin := flag.String("worker-bin", "./bin/subzero-worker", "Path to subzero-worker executable")
 	workerEndpoint := flag.String("worker-endpoint", "/tmp/subzero-worker-spawned.sock", "Socket path or address for spawned worker")
+	spawnerType := flag.String("spawner", "process", "Worker spawner type: process or container (PRD 5.2)")
+	containerEngine := flag.String("container-engine", "docker", "Container engine (docker or podman)")
+	containerImage := flag.String("container-image", "subzero-worker:latest", "Container image for worker sandbox")
 	secretKey := flag.String("secret", "subzero-secret-key-32b-default!", "HMAC secret key")
 	concurrency := flag.Int("concurrency", 16, "Maximum concurrent task limit")
 	idleTimeout := flag.Duration("idle-timeout", 15*time.Second, "Worker idle timeout before scale-to-zero")
 	flag.Parse()
 
-	log.Printf("[Subzero Supervisor] Starting daemon on %s://%s (concurrency: %d)...", *scheme, *endpoint, *concurrency)
+	log.Printf("[Subzero Supervisor] Starting daemon on %s://%s (concurrency: %d, spawner: %s)...", *scheme, *endpoint, *concurrency, *spawnerType)
 
 	tr, err := transport.Get(*scheme)
 	if err != nil {
@@ -46,17 +49,30 @@ func main() {
 	}
 	defer listener.Close()
 
-	// Initialize Automated Process Spawner for Cold-Start / Scale-to-Zero management
-	spawner, err := supervisor.NewProcessSpawner(supervisor.SpawnerConfig{
-		WorkerBinary: *workerBin,
-		Scheme:       *scheme,
-		Endpoint:     *workerEndpoint,
-		SecretKey:    []byte(*secretKey),
-		IdleTimeout:  *idleTimeout,
-		ReadyTimeout: 5 * time.Second,
-	})
+	// Initialize Automated Worker Spawner for Cold-Start / Scale-to-Zero management
+	var spawner supervisor.WorkerSpawner
+	if *spawnerType == "container" {
+		spawner, err = supervisor.NewContainerSpawner(supervisor.ContainerSpawnerConfig{
+			Engine:       *containerEngine,
+			Image:        *containerImage,
+			Scheme:       *scheme,
+			Endpoint:     *workerEndpoint,
+			SecretKey:    []byte(*secretKey),
+			IdleTimeout:  *idleTimeout,
+			ReadyTimeout: 5 * time.Second,
+		})
+	} else {
+		spawner, err = supervisor.NewProcessSpawner(supervisor.SpawnerConfig{
+			WorkerBinary: *workerBin,
+			Scheme:       *scheme,
+			Endpoint:     *workerEndpoint,
+			SecretKey:    []byte(*secretKey),
+			IdleTimeout:  *idleTimeout,
+			ReadyTimeout: 5 * time.Second,
+		})
+	}
 	if err != nil {
-		log.Fatalf("[Subzero Supervisor] Failed to create process spawner: %v", err)
+		log.Fatalf("[Subzero Supervisor] Failed to create worker spawner: %v", err)
 	}
 	defer spawner.Stop()
 
@@ -103,7 +119,7 @@ func main() {
 type relayTask struct {
 	clientConn net.Conn
 	tr         transport.Transport
-	spawner    *supervisor.ProcessSpawner
+	spawner    supervisor.WorkerSpawner
 	workerAddr string
 	secretKey  []byte
 }
@@ -191,7 +207,7 @@ func handleClientTask(
 	ctx context.Context,
 	conn net.Conn,
 	tr transport.Transport,
-	spawner *supervisor.ProcessSpawner,
+	spawner supervisor.WorkerSpawner,
 	dispatcher *supervisor.Dispatcher,
 	workerAddr string,
 	secretKey []byte,
