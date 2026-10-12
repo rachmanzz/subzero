@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/rachmanzz/subzero/pkg/transport"
 )
 
@@ -28,12 +30,14 @@ var (
 
 // SpawnerConfig defines configuration for automated worker process management.
 type SpawnerConfig struct {
-	WorkerBinary string        // Path to the subzero-worker executable
-	Scheme       string        // Transport scheme ("unix", "tcp", "http")
-	Endpoint     string        // Socket path or network address
-	SecretKey    []byte        // HMAC secret key
-	IdleTimeout  time.Duration // Time of inactivity before auto-termination
-	ReadyTimeout time.Duration // Max time to wait for cold-start readiness (e.g. 3s)
+	WorkerBinary string                    // Path to the subzero-worker executable
+	Scheme       string                    // Transport scheme ("unix", "tcp", "http")
+	Endpoint     string                    // Socket path or network address
+	SecretKey    []byte                    // HMAC secret key
+	IdleTimeout  time.Duration             // Time of inactivity before auto-termination
+	ReadyTimeout time.Duration             // Max time to wait for cold-start readiness (e.g. 3s)
+	PolicyPath   string                    // Optional path to worker permission policy file
+	WorkerPolicy *permission.WorkerPolicy  // Optional programmatic worker permission policy
 }
 
 // ProcessSpawner manages on-demand cold-starting and scale-to-zero lifecycle for child workers.
@@ -103,9 +107,19 @@ func (s *ProcessSpawner) EnsureRunning(ctx context.Context) error {
 		"-idle-timeout", s.cfg.IdleTimeout.String(),
 	}
 
+	if s.cfg.PolicyPath != "" {
+		args = append(args, "-policy", s.cfg.PolicyPath)
+	}
+
 	cmd := exec.Command(s.cfg.WorkerBinary, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	if s.cfg.WorkerPolicy != nil {
+		if policyBytes, err := json.Marshal(s.cfg.WorkerPolicy); err == nil {
+			cmd.Env = append(os.Environ(), "SUBZERO_WORKER_POLICY="+string(policyBytes))
+		}
+	}
 
 	if err := cmd.Start(); err != nil {
 		s.state = StateDormant

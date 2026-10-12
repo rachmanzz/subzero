@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/rachmanzz/subzero/internal/runtime/wasm"
 	"github.com/rachmanzz/subzero/internal/worker"
+	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 	"github.com/rachmanzz/subzero/pkg/transport"
 	_ "github.com/rachmanzz/subzero/pkg/transport/http"
@@ -26,6 +28,7 @@ func main() {
 	endpoint := flag.String("endpoint", "/tmp/subzero-worker.sock", "Listen socket path or address")
 	secretKey := flag.String("secret", "subzero-secret-key-32b-default!", "HMAC secret key")
 	idleTimeout := flag.Duration("idle-timeout", 30*time.Second, "Idle timeout duration before auto-terminating (scale-to-zero)")
+	policyFlag := flag.String("policy", "", "Path to worker permission policy file (JSON)")
 	flag.Parse()
 
 	log.Printf("[Subzero Worker] Spawning on %s://%s (idle-timeout: %v)...", *scheme, *endpoint, *idleTimeout)
@@ -64,9 +67,17 @@ func main() {
 		return nil, os.ErrNotExist
 	}
 
+	workerPolicy := resolveWorkerPolicy(*policyFlag)
+	log.Printf("[Subzero Worker] Loaded worker capability policy (AllowedHostCalls: %d, S3Prefixes: %v)",
+		len(workerPolicy.AllowedHostCalls), workerPolicy.S3.AllowedPrefixes)
+
 	var wasmHandler worker.HandlerFunc
 	if wasmEngine != nil {
-		wasmHandler = worker.NewWasmHandler(wasmEngine, resolver)
+		wasmHandler = worker.NewWasmHandlerWithConfig(worker.WasmHandlerConfig{
+			Engine:       wasmEngine,
+			Resolver:     resolver,
+			WorkerPolicy: &workerPolicy,
+		})
 	}
 
 	w := worker.New(worker.Config{
@@ -110,3 +121,33 @@ func main() {
 		log.Printf("[Subzero Worker] Serve exited: %v", err)
 	}
 }
+
+func resolveWorkerPolicy(policyPath string) permission.WorkerPolicy {
+	// 1. Check -policy flag
+	if policyPath != "" {
+		data, err := os.ReadFile(policyPath)
+		if err == nil {
+			var p permission.WorkerPolicy
+			if err := json.Unmarshal(data, &p); err == nil {
+				return p
+			}
+			log.Printf("[Subzero Worker] Warning: failed to parse policy file %s: %v", policyPath, err)
+		} else {
+			log.Printf("[Subzero Worker] Warning: failed to read policy file %s: %v", policyPath, err)
+		}
+	}
+
+	// 2. Check SUBZERO_WORKER_POLICY env
+	if envVal := os.Getenv("SUBZERO_WORKER_POLICY"); envVal != "" {
+		var p permission.WorkerPolicy
+		if err := json.Unmarshal([]byte(envVal), &p); err == nil {
+			return p
+		} else {
+			log.Printf("[Subzero Worker] Warning: failed to parse SUBZERO_WORKER_POLICY env: %v", err)
+		}
+	}
+
+	// 3. Fallback to safe defaults
+	return permission.DefaultWorkerPolicy()
+}
+

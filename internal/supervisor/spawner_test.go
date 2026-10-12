@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rachmanzz/subzero/internal/supervisor"
+	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 	"github.com/rachmanzz/subzero/pkg/transport"
 	_ "github.com/rachmanzz/subzero/pkg/transport/ipc"
@@ -116,3 +117,49 @@ func TestProcessSpawnerLifecycle(t *testing.T) {
 	}
 	t.Log("Worker successfully scaled to zero!")
 }
+
+func TestProcessSpawner_WithCustomPolicy(t *testing.T) {
+	workerBin := filepath.Join("..", "..", "bin", "subzero-worker")
+	if _, err := os.Stat(workerBin); os.IsNotExist(err) {
+		t.Skip("skipping spawner test: bin/subzero-worker binary not found, run make build first")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "subzero-policy-spawner-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sockPath := filepath.Join(tmpDir, "worker.sock")
+	secretKey := []byte("spawner-secret-key-32b-subzero!")
+
+	// Configure spawner with a programmatic WorkerPolicy
+	policy := permission.DefaultWorkerPolicy()
+	policy.S3.AllowedPrefixes = []string{"s3://tenant-alpha-vault/"}
+
+	spawner, err := supervisor.NewProcessSpawner(supervisor.SpawnerConfig{
+		WorkerBinary: workerBin,
+		Scheme:       "unix",
+		Endpoint:     sockPath,
+		SecretKey:    secretKey,
+		IdleTimeout:  300 * time.Millisecond,
+		ReadyTimeout: 5 * time.Second,
+		WorkerPolicy: &policy,
+	})
+	if err != nil {
+		t.Fatalf("NewProcessSpawner failed: %v", err)
+	}
+	defer spawner.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := spawner.EnsureRunning(ctx); err != nil {
+		t.Fatalf("EnsureRunning failed: %v", err)
+	}
+
+	if spawner.State() != supervisor.StateRunning {
+		t.Fatalf("expected state RUNNING, got %s", spawner.State())
+	}
+}
+
