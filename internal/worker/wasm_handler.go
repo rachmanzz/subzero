@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rachmanzz/subzero/internal/runtime/wasm"
+	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 	"github.com/rachmanzz/subzero/pkg/sdk"
 )
@@ -31,10 +32,38 @@ func DefaultFileResolver(target string) ([]byte, error) {
 	return nil, fmt.Errorf("wasm resolver: target %q is not a valid wasm file path", target)
 }
 
-// NewWasmHandler creates a Worker HandlerFunc that routes incoming TaskMessages to the Wazero Wasm sandbox.
+// ModuleRequestResolver resolves an action target to a ModuleRequest (from config.zero).
+type ModuleRequestResolver func(target string) (*permission.ModuleRequest, error)
+
+// WasmHandlerConfig configures the Wasm worker handler with capability policy.
+type WasmHandlerConfig struct {
+	Engine                *wasm.Engine
+	Resolver              WasmModuleResolver
+	WorkerPolicy          *permission.WorkerPolicy
+	ModuleRequestResolver ModuleRequestResolver
+}
+
+// NewWasmHandler creates a Worker HandlerFunc using default worker policy.
 func NewWasmHandler(engine *wasm.Engine, resolver WasmModuleResolver) HandlerFunc {
+	policy := permission.DefaultWorkerPolicy()
+	return NewWasmHandlerWithConfig(WasmHandlerConfig{
+		Engine:       engine,
+		Resolver:     resolver,
+		WorkerPolicy: &policy,
+	})
+}
+
+// NewWasmHandlerWithConfig creates a Worker HandlerFunc with custom capability policy and request resolution.
+func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
+	resolver := cfg.Resolver
 	if resolver == nil {
 		resolver = DefaultFileResolver
+	}
+
+	workerPolicy := cfg.WorkerPolicy
+	if workerPolicy == nil {
+		p := permission.DefaultWorkerPolicy()
+		workerPolicy = &p
 	}
 
 	return func(ctx context.Context, task *protocol.TaskMessage) (*protocol.ResultMessage, error) {
@@ -45,6 +74,78 @@ func NewWasmHandler(engine *wasm.Engine, resolver WasmModuleResolver) HandlerFun
 				IsSuccess:    false,
 				ErrorMessage: fmt.Sprintf("failed to resolve wasm module %q: %v", task.ActionTarget, err),
 			}, nil
+		}
+
+		// 1. Resolve requested permissions for module (if any)
+		var moduleReq *permission.ModuleRequest
+		if cfg.ModuleRequestResolver != nil {
+			if r, err := cfg.ModuleRequestResolver(task.ActionTarget); err == nil {
+				moduleReq = r
+			}
+		}
+
+		// Check if task.CustomConfig passes requested permissions in JSON
+		if pJSON, ok := task.CustomConfig["permissions"]; ok && pJSON != "" {
+			var r permission.ModuleRequest
+			if err := json.Unmarshal([]byte(pJSON), &r); err == nil {
+				moduleReq = &r
+			}
+		}
+
+		// 2. Evaluate Effective Permissions (Privilege Escalation Check)
+		effective, err := permission.Evaluate(workerPolicy, moduleReq)
+		if err != nil {
+			return &protocol.ResultMessage{
+				TaskID:       task.TaskID,
+				IsSuccess:    false,
+				ErrorMessage: fmt.Sprintf("permission denied: %v", err),
+			}, nil
+		}
+
+		// 3. Enforce S3 prefix policy on task.SourceURI
+		if task.SourceURI != "" && strings.HasPrefix(task.SourceURI, "s3://") {
+			allowed := false
+			for _, prefix := range effective.S3.AllowedPrefixes {
+				if prefix == "*" || prefix == "s3://" || strings.HasPrefix(task.SourceURI, prefix) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return &protocol.ResultMessage{
+					TaskID:       task.TaskID,
+					IsSuccess:    false,
+					ErrorMessage: fmt.Sprintf("permission denied: source URI %q not permitted by S3 prefixes %v", task.SourceURI, effective.S3.AllowedPrefixes),
+				}, nil
+			}
+		}
+
+		// 4. Enforce File Extension policy on task.SourceURI
+		if task.SourceURI != "" && len(effective.Files.AllowedExtensions) > 0 {
+			hasWildcard := false
+			for _, ext := range effective.Files.AllowedExtensions {
+				if ext == "*" {
+					hasWildcard = true
+					break
+				}
+			}
+			if !hasWildcard {
+				sourceLower := strings.ToLower(task.SourceURI)
+				extAllowed := false
+				for _, ext := range effective.Files.AllowedExtensions {
+					if strings.HasSuffix(sourceLower, ext) {
+						extAllowed = true
+						break
+					}
+				}
+				if !extAllowed {
+					return &protocol.ResultMessage{
+						TaskID:       task.TaskID,
+						IsSuccess:    false,
+						ErrorMessage: fmt.Sprintf("permission denied: file extension of %q not permitted by policy %v", task.SourceURI, effective.Files.AllowedExtensions),
+					}, nil
+				}
+			}
 		}
 
 		// Inject task parameters into Wasm environment variables
@@ -62,6 +163,23 @@ func NewWasmHandler(engine *wasm.Engine, resolver WasmModuleResolver) HandlerFun
 		var execOpts wasm.ExecOptions
 		execOpts.Env = env
 
+		// Mount effective read-only directories
+		for _, ro := range effective.Filesystem.ReadOnly {
+			execOpts.DirMounts = append(execOpts.DirMounts, wasm.DirMount{
+				HostDir:   ro,
+				GuestPath: ro,
+				ReadOnly:  true,
+			})
+		}
+		// Mount effective read-write scratch directories
+		for _, rw := range effective.Filesystem.ReadWrite {
+			execOpts.DirMounts = append(execOpts.DirMounts, wasm.DirMount{
+				HostDir:   rw,
+				GuestPath: rw,
+				ReadOnly:  false,
+			})
+		}
+
 		if tStr, ok := task.CustomConfig["timeout_ms"]; ok {
 			if ms, err := strconv.Atoi(tStr); err == nil && ms > 0 {
 				execOpts.Timeout = time.Duration(ms) * time.Millisecond
@@ -74,7 +192,7 @@ func NewWasmHandler(engine *wasm.Engine, resolver WasmModuleResolver) HandlerFun
 			}
 		}
 
-		execRes, err := engine.Execute(ctx, wasmBytes, execOpts)
+		execRes, err := cfg.Engine.Execute(ctx, wasmBytes, execOpts)
 		var execDuration string
 		if execRes != nil {
 			execDuration = execRes.Duration.String()

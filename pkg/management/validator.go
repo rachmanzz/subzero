@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/rachmanzz/subzero/pkg/permission"
 )
 
 var (
@@ -52,14 +54,15 @@ var forbiddenImports = map[string]string{
 
 // ConfigZero defines the module metadata and runtime specification declared in config.zero.
 type ConfigZero struct {
-	Name             string `json:"name" yaml:"name"`
-	Version          string `json:"version" yaml:"version"`
-	Tenant           string `json:"tenant" yaml:"tenant"`
-	Target           string `json:"target" yaml:"target"`                 // Default: "wasip1"
-	Entrypoint       string `json:"entrypoint" yaml:"entrypoint"`         // Default: "main.go"
-	Description      string `json:"description" yaml:"description"`
-	MemoryLimitPages uint32 `json:"memory_limit_pages" yaml:"memory_limit_pages"`
-	Timeout          string `json:"timeout" yaml:"timeout"`
+	Name             string                    `json:"name" yaml:"name"`
+	Version          string                    `json:"version" yaml:"version"`
+	Tenant           string                    `json:"tenant" yaml:"tenant"`
+	Target           string                    `json:"target" yaml:"target"`                 // Default: "wasip1"
+	Entrypoint       string                    `json:"entrypoint" yaml:"entrypoint"`         // Default: "main.go"
+	Description      string                    `json:"description" yaml:"description"`
+	MemoryLimitPages uint32                    `json:"memory_limit_pages" yaml:"memory_limit_pages"`
+	Timeout          string                    `json:"timeout" yaml:"timeout"`
+	Permissions      *permission.ModuleRequest `json:"permissions,omitempty" yaml:"permissions"`
 }
 
 // ModulePackageInfo contains the verified components of an uploaded module package.
@@ -119,6 +122,51 @@ func ParseConfigZero(data []byte) (*ConfigZero, error) {
 				cfg.MemoryLimitPages = pages
 			case "timeout":
 				cfg.Timeout = v
+			case "permissions.host_calls", "permission.host_calls":
+				if cfg.Permissions == nil {
+					cfg.Permissions = &permission.ModuleRequest{}
+				}
+				for _, item := range strings.Split(v, ",") {
+					if c := strings.TrimSpace(item); c != "" {
+						cfg.Permissions.HostCalls = append(cfg.Permissions.HostCalls, c)
+					}
+				}
+			case "permissions.filesystem.read_only", "permissions.read_only":
+				if cfg.Permissions == nil {
+					cfg.Permissions = &permission.ModuleRequest{}
+				}
+				for _, item := range strings.Split(v, ",") {
+					if c := strings.TrimSpace(item); c != "" {
+						cfg.Permissions.Filesystem.ReadOnly = append(cfg.Permissions.Filesystem.ReadOnly, c)
+					}
+				}
+			case "permissions.filesystem.read_write", "permissions.read_write":
+				if cfg.Permissions == nil {
+					cfg.Permissions = &permission.ModuleRequest{}
+				}
+				for _, item := range strings.Split(v, ",") {
+					if c := strings.TrimSpace(item); c != "" {
+						cfg.Permissions.Filesystem.ReadWrite = append(cfg.Permissions.Filesystem.ReadWrite, c)
+					}
+				}
+			case "permissions.s3.allowed_prefixes", "permissions.s3_prefixes":
+				if cfg.Permissions == nil {
+					cfg.Permissions = &permission.ModuleRequest{}
+				}
+				for _, item := range strings.Split(v, ",") {
+					if c := strings.TrimSpace(item); c != "" {
+						cfg.Permissions.S3.AllowedPrefixes = append(cfg.Permissions.S3.AllowedPrefixes, c)
+					}
+				}
+			case "permissions.files.allowed_extensions", "permissions.allowed_extensions":
+				if cfg.Permissions == nil {
+					cfg.Permissions = &permission.ModuleRequest{}
+				}
+				for _, item := range strings.Split(v, ",") {
+					if c := strings.TrimSpace(item); c != "" {
+						cfg.Permissions.Files.AllowedExtensions = append(cfg.Permissions.Files.AllowedExtensions, c)
+					}
+				}
 			}
 		}
 	}
@@ -233,6 +281,13 @@ func VerifyModulePackage(rootPath string) (*ModulePackageInfo, error) {
 		return nil, fmt.Errorf("%w: %s is missing func main()", ErrInvalidMainEntrypoint, filepath.Base(mainPath))
 	}
 
+	// 4. Validate requested permissions safety if declared in config.zero
+	if cfg.Permissions != nil {
+		if err := validateRequestedPermissions(cfg.Permissions); err != nil {
+			return nil, fmt.Errorf("structure: invalid permission request: %w", err)
+		}
+	}
+
 	return &ModulePackageInfo{
 		RootPath:      workDir,
 		Config:        cfg,
@@ -240,6 +295,28 @@ func VerifyModulePackage(rootPath string) (*ModulePackageInfo, error) {
 		ReadmePath:    readmePath,
 		ReadmeContent: string(readmeData),
 	}, nil
+}
+
+func validateRequestedPermissions(req *permission.ModuleRequest) error {
+	for _, p := range append(req.Filesystem.ReadOnly, req.Filesystem.ReadWrite...) {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		if !filepath.IsAbs(trimmed) {
+			return fmt.Errorf("requested path must be absolute: %q", p)
+		}
+		clean := filepath.Clean(trimmed)
+		if strings.Contains(clean, "..") {
+			return fmt.Errorf("path traversal forbidden: %q", p)
+		}
+		for _, sens := range []string{"/etc", "/root", "/boot", "/sys", "/proc", "/dev"} {
+			if clean == sens || strings.HasPrefix(clean, sens+"/") {
+				return fmt.Errorf("access to sensitive system directory forbidden: %q", clean)
+			}
+		}
+	}
+	return nil
 }
 
 // VerifyStructure verifies module package structure and returns the main entrypoint file path.

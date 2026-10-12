@@ -96,6 +96,13 @@ type ExecResult struct {
 	FuelRemaining      uint64 // Remaining fuel budget (if metering was active)
 }
 
+// DirMount specifies a host directory mounted into the guest WASI filesystem.
+type DirMount struct {
+	HostDir   string
+	GuestPath string
+	ReadOnly  bool
+}
+
 // ExecOptions defines runtime parameters passed into the Wasm instance.
 type ExecOptions struct {
 	Stdin     io.Reader
@@ -103,6 +110,7 @@ type ExecOptions struct {
 	Args      []string
 	Timeout   time.Duration
 	FuelLimit uint64 // Maximum operations allowed (0 = use default or unlimited)
+	DirMounts []DirMount
 }
 
 type fuelListener struct {
@@ -204,6 +212,19 @@ func (e *Engine) Execute(ctx context.Context, wasmBytes []byte, opts ExecOptions
 	// Pass environment variables
 	for k, v := range opts.Env {
 		modCfg = modCfg.WithEnv(k, v)
+	}
+
+	// Mount configured sandboxed directories
+	if len(opts.DirMounts) > 0 {
+		fsCfg := wazero.NewFSConfig()
+		for _, m := range opts.DirMounts {
+			if m.ReadOnly {
+				fsCfg = fsCfg.WithReadOnlyDirMount(m.HostDir, m.GuestPath)
+			} else {
+				fsCfg = fsCfg.WithDirMount(m.HostDir, m.GuestPath)
+			}
+		}
+		modCfg = modCfg.WithFSConfig(fsCfg)
 	}
 
 	// Instantiate and execute _start (WASI main entrypoint)

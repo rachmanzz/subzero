@@ -50,6 +50,9 @@ The `config.zero` file is the **Module Contract Manifest** in Subzero. Located a
 | `description`| String | Optional | - | Summary of module functionality. |
 | `memory_limit_pages` | Integer | Optional | `512` | Maximum RAM quota in Wasm page units (1 page = 64 KB; `512` = 32 MB). |
 | `timeout` | Duration | Optional | `10s` | Maximum CPU execution time before forced termination. |
+| `permissions` | Object | Optional | - | Requested capabilities (evaluated against host Worker Policy). |
+
+> **Important Architecture Principle**: `config.zero` is a **Capability Request Manifest**, not an authority granting permissions. The host **Worker Process** enforces an absolute **Worker Permission Policy** (*Granted Ceiling*). If a module requests capabilities exceeding the worker policy, execution is immediately rejected (*Privilege Escalation Rejected*).
 
 ### Sample `config.zero` Formats
 
@@ -64,6 +67,13 @@ entrypoint: main.go
 description: Normalize Bank BCA bank statement exports into Subzero canonical format
 memory_limit_pages: 512
 timeout: 15s
+
+# Capability permissions requested by the module
+permissions.host_calls: storage:get_object, logger:debug
+permissions.filesystem.read_only: /tmp/subzero-tenants/in
+permissions.filesystem.read_write: /tmp/subzero-workspace/scratch
+permissions.s3.allowed_prefixes: s3://bca-vault/incoming/
+permissions.files.allowed_extensions: .csv, .xlsx, .json
 ```
 
 #### Option B: JSON Format
@@ -76,7 +86,20 @@ timeout: 15s
   "entrypoint": "main.go",
   "description": "Normalize Bank BCA bank statement exports into Subzero canonical format",
   "memory_limit_pages": 512,
-  "timeout": "15s"
+  "timeout": "15s",
+  "permissions": {
+    "host_calls": ["storage:get_object", "logger:debug"],
+    "filesystem": {
+      "read_only": ["/tmp/subzero-tenants/in"],
+      "read_write": ["/tmp/subzero-workspace/scratch"]
+    },
+    "s3": {
+      "allowed_prefixes": ["s3://bca-vault/incoming/"]
+    },
+    "files": {
+      "allowed_extensions": [".csv", ".xlsx", ".json"]
+    }
+  }
 }
 ```
 

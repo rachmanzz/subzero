@@ -69,3 +69,71 @@ func main() {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 }
+
+func TestWorkerWasmHandler_PermissionPolicyEnforcement(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := wasm.DefaultConfig()
+	engine, err := wasm.NewEngine(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	defer engine.Close(ctx)
+
+	resolver := func(target string) ([]byte, error) {
+		return []byte{}, nil
+	}
+
+	handler := worker.NewWasmHandler(engine, resolver)
+
+	// 1. Task requests unauthorized host call
+	taskEscalation := &protocol.TaskMessage{
+		TaskID:       "task-esc-1",
+		TenantID:     "tenant-t1",
+		ActionTarget: "tenant-t1/transformer",
+		CustomConfig: map[string]string{
+			"permissions": `{"host_calls": ["forbidden:kernel_trap"]}`,
+		},
+	}
+	res, err := handler(ctx, taskEscalation)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsSuccess {
+		t.Fatalf("expected task to fail due to unauthorized host call")
+	}
+
+	// 2. Task requests S3 prefix outside policy
+	taskS3Violation := &protocol.TaskMessage{
+		TaskID:       "task-s3-1",
+		TenantID:     "tenant-t1",
+		ActionTarget: "tenant-t1/transformer",
+		SourceURI:    "s3://other-tenant-vault/secret.csv",
+		CustomConfig: map[string]string{
+			"permissions": `{"s3": {"allowed_prefixes": ["s3://other-tenant-vault/"]}}`,
+		},
+	}
+	res2, err := handler(ctx, taskS3Violation)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res2.IsSuccess {
+		t.Fatalf("expected task to fail due to S3 prefix violation")
+	}
+
+	// 3. Task with forbidden file extension
+	taskExtViolation := &protocol.TaskMessage{
+		TaskID:       "task-ext-1",
+		TenantID:     "tenant-t1",
+		ActionTarget: "tenant-t1/transformer",
+		SourceURI:    "/tmp/payload.exe",
+	}
+	res3, err := handler(ctx, taskExtViolation)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res3.IsSuccess {
+		t.Fatalf("expected task to fail due to forbidden file extension .exe")
+	}
+}
+

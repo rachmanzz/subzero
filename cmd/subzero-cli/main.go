@@ -139,7 +139,14 @@ entrypoint: main.go
 description: Data transformation module for Subzero runtime
 memory_limit_pages: 512
 timeout: 10s
-`, *name, *tenant, *target)
+
+# Capability permissions requested by this module (evaluated against Worker Policy)
+permissions.host_calls: storage:get_object, logger:debug
+permissions.filesystem.read_only: /tmp/subzero-tenants/in
+permissions.filesystem.read_write: /tmp/subzero-workspace/scratch
+permissions.s3.allowed_prefixes: s3://%s-vault/
+permissions.files.allowed_extensions: .csv, .xlsx, .json
+`, *name, *tenant, *target, *tenant)
 	if err := os.WriteFile(filepath.Join(targetDir, "config.zero"), []byte(cfgZero), 0644); err != nil {
 		return err
 	}

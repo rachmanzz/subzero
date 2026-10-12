@@ -312,3 +312,71 @@ func main() {
 		t.Fatalf("expected SHELL_LITERAL_DETECTED rule violation, got: %+v", report.Violations)
 	}
 }
+
+func TestVerifyStructure_PermissionsValid(t *testing.T) {
+	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": `name: perm-module
+permissions.host_calls: storage:get_object, logger:debug
+permissions.filesystem.read_only: /tmp/subzero-tenants/in
+permissions.filesystem.read_write: /tmp/subzero-workspace/out
+permissions.s3.allowed_prefixes: s3://my-bucket/data/
+permissions.files.allowed_extensions: .csv, .json
+`,
+		"readme.md": "# Docs",
+		"main.go": `package main
+func main() {}
+`,
+	})
+	defer os.RemoveAll(dir)
+
+	pkgInfo, err := management.VerifyModulePackage(dir)
+	if err != nil {
+		t.Fatalf("expected valid package with permissions, got error: %v", err)
+	}
+	if pkgInfo.Config.Permissions == nil {
+		t.Fatal("expected permissions to be parsed, got nil")
+	}
+	if len(pkgInfo.Config.Permissions.HostCalls) != 2 {
+		t.Errorf("expected 2 host calls, got %d", len(pkgInfo.Config.Permissions.HostCalls))
+	}
+	if len(pkgInfo.Config.Permissions.Filesystem.ReadOnly) != 1 {
+		t.Errorf("expected 1 read-only path, got %d", len(pkgInfo.Config.Permissions.Filesystem.ReadOnly))
+	}
+}
+
+func TestVerifyStructure_PermissionsSensitivePathReject(t *testing.T) {
+	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": `name: bad-perm-module
+permissions.filesystem.read_only: /etc/shadow
+`,
+		"readme.md": "# Docs",
+		"main.go": `package main
+func main() {}
+`,
+	})
+	defer os.RemoveAll(dir)
+
+	_, err := management.VerifyModulePackage(dir)
+	if err == nil {
+		t.Fatal("expected error for sensitive path /etc/shadow, got nil")
+	}
+}
+
+func TestVerifyStructure_PermissionsPathTraversalReject(t *testing.T) {
+	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": `name: bad-perm-module
+permissions.filesystem.read_only: /tmp/../../etc/passwd
+`,
+		"readme.md": "# Docs",
+		"main.go": `package main
+func main() {}
+`,
+	})
+	defer os.RemoveAll(dir)
+
+	_, err := management.VerifyModulePackage(dir)
+	if err == nil {
+		t.Fatal("expected error for path traversal, got nil")
+	}
+}
+
