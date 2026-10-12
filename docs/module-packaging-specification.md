@@ -1,59 +1,59 @@
-# Spesifikasi Standar Paket Modul WebAssembly Subzero
+# Subzero WebAssembly Module Packaging Specification
 
-Dokumen ini merupakan panduan spesifikasi teknis resmi (*Official Technical Specification*) untuk pembuatan, pengemasan, validasi, dan publikasi modul transformasi data WebAssembly (Wasm) pada ekosistem **Subzero**.
-
----
-
-## 1. Filosofi & Tujuan Desain
-
-Platform SaaS B2B Subzero memproses berkas dokumen (spreadsheet, CSV, JSON, atau aliran byte data mentah) dari puluhan hingga ratusan klien (*tenants*) yang masing-masing memiliki format kolom, validasi, dan aturan bisnis berbeda.
-
-Untuk menjaga integritas server utama dan mencegah kegagalan (*crash*) lintas klien, seluruh logika pemrosesan tenant diisolasi ke dalam **Self-Contained Micro-Package** yang dikompilasi menjadi bytecode WebAssembly sandboxed (`GOOS=wasip1 GOARCH=wasm`).
-
-Setiap modul yang diunggah ke Subzero wajib dibungkus sebagai arsip `.tar.gz` yang mematuhi standar struktur direktori dan tata kelola keamanan. **Setiap pelanggaran terhadap spesifikasi ini akan langsung ditolak sistem (*Strict Rejection Policy*).**
+This document provides the official technical specification for authoring, packaging, validating, and publishing WebAssembly (Wasm) data transformation modules within the **Subzero** ecosystem.
 
 ---
 
-## 2. Struktur Direktori Standar
+## 1. Philosophy & Design Goals
 
-Arsip `.tar.gz` modul wajib memiliki hierarki direktori sebagai berikut:
+The Subzero B2B SaaS platform processes document files (spreadsheets, CSVs, JSON, or raw byte streams) from dozens or hundreds of tenants, each with disparate column layouts, validation rules, and business logic.
+
+To protect the integrity of the host runtime and prevent cross-tenant cascading failures, all tenant-specific parsing logic is isolated into **Self-Contained Micro-Packages** compiled into sandboxed WebAssembly bytecode (`GOOS=wasip1 GOARCH=wasm`).
+
+Every module submitted to Subzero must be packaged as a `.tar.gz` archive adhering to a strict directory hierarchy and security policy. **Any violation of this specification will result in an immediate rejection (*Strict Rejection Policy*).**
+
+---
+
+## 2. Standard Directory Structure
+
+A module's `.tar.gz` archive must conform to the following directory hierarchy:
 
 ```text
-<nama-modul>/
-├── config.zero          # [WAJIB] Manifest spesifikasi runtime, metadata & batas kuota
-├── readme.md            # [WAJIB] Dokumentasi modul, peruntukan tenant, & skema data
-├── main.go              # [WAJIB] Entrypoint Go utama (package main, func main)
-├── go.mod               # [WAJIB jika ada import] Deklarasi modul Go
-├── go.sum               # [OPSIONAL] Checksum verifikasi dependensi pihak ketiga
-├── parsers/             # [OPSIONAL] Sub-package internal pendukung logika
+<module-name>/
+├── config.zero          # [REQUIRED] Runtime manifest, metadata & quota limits
+├── readme.md            # [REQUIRED] Module documentation, tenant scope & data schema
+├── main.go              # [REQUIRED] Primary Go entrypoint (package main, func main)
+├── go.mod               # [REQUIRED if importing modules] Go module declaration
+├── go.sum               # [OPTIONAL] Third-party dependency checksum verification
+├── parsers/             # [OPTIONAL] Internal sub-packages supporting domain logic
 │   └── normalizer.go
-└── schema/              # [OPSIONAL] Contoh data & skema validasi
+└── schema/              # [OPTIONAL] Sample data and validation fixtures
     ├── sample.input.csv
     └── expected.output.json
 ```
 
 ---
 
-## 3. Spesifikasi Berkas `config.zero`
+## 3. `config.zero` Manifest Specification
 
-Berkas `config.zero` adalah **Manifest Kontrak Modul** di Subzero. Berkas ini diletakkan di root arsip dan dapat ditulis dalam format **YAML / Key-Value** atau **JSON**.
+The `config.zero` file is the **Module Contract Manifest** in Subzero. Located at the root of the archive, it can be formatted as either **YAML / Key-Value** or **JSON**.
 
 ### Schema Reference
 
-| Field | Tipe Data | Status | Default | Deskripsi |
+| Field | Data Type | Requirement | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `name` | String | **Wajib** | - | Identifier unik modul (hanya huruf, angka, `-`, `_`). |
-| `version` | String | Opsional | `1.0.0` | Versi semantik modul (*Semantic Versioning*). |
-| `tenant` | String | Opsional | `default` | Identitas klien / tenant pemilik modul. |
-| `target` | String | Opsional | `wasip1` | Target arsitektur runtime Wasm (standar: `wasip1`). |
-| `entrypoint`| String | Opsional | `main.go` | Nama berkas Go yang memuat `package main` & `func main()`. |
-| `description`| String | Opsional | - | Ringkasan fungsionalitas modul. |
-| `memory_limit_pages` | Integer | Opsional | `512` | Batas maksimum RAM dalam ukuran halaman Wasm (1 halaman = 64 KB. `512` = 32 MB). |
-| `timeout` | Duration | Opsional | `10s` | Batas waktu maksimal eksekusi CPU sebelum dimatikan paksa. |
+| `name` | String | **Required** | - | Unique module identifier (alphanumeric, `-`, `_` only). |
+| `version` | String | Optional | `1.0.0` | Semantic version string (*Semantic Versioning*). |
+| `tenant` | String | Optional | `default` | Tenant identity owning the module. |
+| `target` | String | Optional | `wasip1` | Target Wasm runtime architecture (default: `wasip1`). |
+| `entrypoint`| String | Optional | `main.go` | Go source file containing `package main` & `func main()`. |
+| `description`| String | Optional | - | Summary of module functionality. |
+| `memory_limit_pages` | Integer | Optional | `512` | Maximum RAM quota in Wasm page units (1 page = 64 KB; `512` = 32 MB). |
+| `timeout` | Duration | Optional | `10s` | Maximum CPU execution time before forced termination. |
 
-### Contoh Format `config.zero`
+### Sample `config.zero` Formats
 
-#### Opsi A: YAML / Key-Value (Dianjurkan)
+#### Option A: YAML / Key-Value (Recommended)
 ```yaml
 # config.zero
 name: bca-statement-normalizer
@@ -61,12 +61,12 @@ version: 1.0.0
 tenant: client-bank-bca
 target: wasip1
 entrypoint: main.go
-description: Normalisasi mutasi rekening Bank BCA ke format kanonikal Subzero
+description: Normalize Bank BCA bank statement exports into Subzero canonical format
 memory_limit_pages: 512
 timeout: 15s
 ```
 
-#### Opsi B: Format JSON
+#### Option B: JSON Format
 ```json
 {
   "name": "bca-statement-normalizer",
@@ -74,7 +74,7 @@ timeout: 15s
   "tenant": "client-bank-bca",
   "target": "wasip1",
   "entrypoint": "main.go",
-  "description": "Normalisasi mutasi rekening Bank BCA ke format kanonikal Subzero",
+  "description": "Normalize Bank BCA bank statement exports into Subzero canonical format",
   "memory_limit_pages": 512,
   "timeout": "15s"
 }
@@ -82,97 +82,96 @@ timeout: 15s
 
 ---
 
-## 4. Spesifikasi Berkas `readme.md`
+## 4. `readme.md` Specification
 
-Sebagai platform B2B multi-tenant, setiap modul **wajib menyertakan dokumentasi yang jelas** dalam berkas `readme.md` (atau `README.md`) non-kosong.
+As a multi-tenant enterprise system, every module **must include clear documentation** in a non-empty `readme.md` (or `README.md`) file.
 
-Dokumentasi ini harus memuat:
-1. **Tujuan Bisnis**: Penjelasan singkat modul dan nama tenant pengguna.
-2. **Karakteristik Format Asal (Input)**:
-   * Urutan nama kolom mentah (misal: `NoRek, MataUang, SaldoKotor, CatatanInternal, NamaLengkap`).
-   * Format penulisan angka atau tanggal (misal: pemisah desimal koma vs titik, nominal dalam satuan sen).
-3. **Format Kanonikal Tujuan (Output)**:
-   * Skema output standar yang dikeluarkan modul (misal: JSON/CSV dengan kolom standar `account_id, currency, balance, holder_name`).
-4. **Aturan Penanganan Anomali**: Penjelasan jika modul mengabaikan baris kosong, baris subtotal, atau header ganda.
+This documentation must cover:
+1. **Business Objective**: Overview of the module and target tenant organization.
+2. **Input Format Specifications**:
+   * Raw header column names and ordering (e.g. `AccountNo, Currency, GrossBalance, Notes, FullName`).
+   * Numerical and date conventions (e.g. comma vs period decimal separators, amounts stored in cents/satoshis).
+3. **Canonical Output Format**:
+   * Target schema produced by the module (e.g. canonical JSON/CSV with standard fields `account_id, currency, balance, holder_name`).
+4. **Edge Case Handling**: Policies for handling empty rows, subtotal summary rows, duplicate headers, or invalid encodings.
 
 ---
 
-## 5. Entrypoint `main.go` & Modularitas Kode
+## 5. Entrypoint `main.go` & Code Modularity
 
-### A. Persyaratan Entrypoint
-* Berkas yang ditunjuk oleh `entrypoint` (default: `main.go`) wajib dideklarasikan dengan `package main` dan memiliki fungsi `func main()`.
-* **Protokol I/O Aliran Data**:
-  * **Input**: Membaca aliran data mentah langsung dari Standard Input (`os.Stdin`).
-  * **Output**: Menuliskan data hasil normalisasi yang sudah bersih ke Standard Output (`os.Stdout`).
-  * **Logging & Error**: Pesan debug atau peringatan dikirim ke Standard Error (`os.Stderr`).
+### A. Entrypoint Requirements
+* The file specified by `entrypoint` (default: `main.go`) must declare `package main` and implement `func main()`.
+* **Data Stream I/O Protocol**:
+  * **Input**: Ingests raw input streams directly via Standard Input (`os.Stdin`) or environment variables.
+  * **Output**: Writes sanitized, normalized canonical results to Standard Output (`os.Stdout`).
+  * **Logging & Errors**: Diagnostic logs and warnings are streamed to Standard Error (`os.Stderr`).
 
-### B. Impor Kode Internal
-Kode tidak perlu ditumpuk dalam satu file. Anda dapat memecahnya ke dalam beberapa file `.go` atau sub-folder internal:
+### B. Internal Sub-package Imports
+Code does not need to be condensed into a single file. You can organize your module into multiple `.go` files or internal sub-directories:
 ```go
 package main
 
 import (
-    "fmt"
     "os"
-    "my-module/parsers" // Mengimpor sub-package internal di arsip yang sama
+    "my-module/parsers" // Importing internal sub-package within the archive
 )
 
 func main() {
     parsers.Process(os.Stdin, os.Stdout)
 }
 ```
-Kompiler Subzero mengompilasi **seluruh direktori package**, sehingga semua berkas internal otomatis terhubung (*linked*).
+The Subzero compiler compiles the **entire package directory**, automatically linking all internal source files.
 
-### C. Impor Library Eksternal via `go.mod`
-Modul dapat mengimpor library pihak ketiga dengan syarat:
-1. Menyertakan berkas `go.mod` (dan `go.sum`).
-2. Library harus merupakan **Pure Go** yang kompatibel dengan target `wasip1` (tidak menggunakan CGo native).
+### C. External Dependencies via `go.mod`
+Modules can import third-party Go libraries under the following conditions:
+1. The archive includes valid `go.mod` (and `go.sum`) files.
+2. All dependencies are **Pure Go** compatible with `GOOS=wasip1 GOARCH=wasm` (no native CGo bindings).
 
 ---
 
-## 6. Kontrak Antarmuka Pemrosesan (Subzero Go SDK)
+## 6. Processing Interface Contract (Subzero Go SDK)
 
-Untuk mempermudah pembuatan modul dan memastikan pemrosesan data terstandarisasi, Subzero menyediakan pustaka resmi **`pkg/sdk`** (`github.com/rachmanzz/subzero/pkg/sdk`).
+To streamline module development and guarantee predictable execution, Subzero provides the official **`pkg/sdk`** library (`github.com/rachmanzz/subzero/pkg/sdk`).
 
-### A. Pola Dua Tahap: `Receive` dan `Return`
+### A. Two-Phase Contract: `Receive` and `Return`
 
-Setiap modul transformasi mengimplementasikan interface `sdk.Transformer`:
+Every transformation module implements the `sdk.Transformer` interface:
 
 ```go
 type Transformer interface {
-    // Receive menerima dan memvalidasi request metadata & payload mentah dari host Subzero.
+    // Receive ingests and validates the task metadata and raw payload from the host.
     Receive(ctx context.Context, req *sdk.Request) error
 
-    // Return memproses data dan mengembalikan hasil normalisasi serta metrik jumlah baris ke Subzero.
+    // Return executes data processing and emits canonical results and row counts back to Subzero.
     Return(ctx context.Context) (*sdk.Response, error)
 }
 ```
 
-#### Struktur Data `sdk.Request` (Input)
+#### Input Data Structure: `sdk.Request`
 ```go
 type Request struct {
-    TaskID       string            // ID unik penugasan
-    TenantID     string            // Identitas tenant
-    ActionTarget string            // Target aksi (misal: "normalize", "parse")
-    SourceURI    string            // URI berkas sumber (S3 / lokal) jika ada
-    CustomConfig map[string]string // Konfigurasi dinamis dari SUBZERO_CFG_*
-    Payload      []byte            // Byte data mentah (CSV, JSON, teks)
+    TaskID       string            // Unique task execution ID
+    TenantID     string            // Tenant identifier
+    ActionTarget string            // Action target (e.g. "normalize", "parse")
+    SourceURI    string            // Source file URI (S3 / local) if applicable
+    CustomConfig map[string]string // Dynamic parameters passed via SUBZERO_CFG_*
+    Payload      []byte            // Raw input bytes (CSV, JSON, text)
 }
 ```
 
-#### Struktur Data `sdk.Response` (Output)
+#### Output Data Structure: `sdk.Response`
 ```go
 type Response struct {
-    IsSuccess     bool              // Status keberhasilan eksekusi
-    ProcessedRows int               // Metrik jumlah baris valid yang berhasil diproses
-    Data          []byte            // Byte data hasil normalisasi (CSV/JSON kanonikal)
-    OutputURI     string            // URI berkas tujuan jika ditulis langsung
-    Metadata      map[string]string // Metadata tambahan (misal: delimiter, encoding)
-    ErrorMessage  string            // Pesan error jika transformasi gagal
+    IsSuccess     bool              // Execution status flag
+    ProcessedRows int               // Count of valid records/rows successfully processed
+    Data          []byte            // Normalized canonical output bytes
+    OutputURI     string            // Destination URI if writing directly to object store
+    Metadata      map[string]string // Additional metadata (e.g. schema_version, encoding)
+    ErrorMessage  string            // Failure message if processing encountered an error
 }
 ```
 
-### B. Contoh Implementasi Lengkap `main.go`
+### B. Complete Implementation Example: `main.go`
 
 ```go
 package main
@@ -192,10 +191,10 @@ type StatementNormalizer struct {
     rows [][]string
 }
 
-// 1. Receive: Menerima data dan memvalidasi payload
+// 1. Receive: Ingests metadata and validates the raw payload
 func (n *StatementNormalizer) Receive(ctx context.Context, req *sdk.Request) error {
     if len(req.Payload) == 0 {
-        return fmt.Errorf("payload kosong")
+        return fmt.Errorf("payload cannot be empty")
     }
     n.req = req
 
@@ -206,19 +205,19 @@ func (n *StatementNormalizer) Receive(ctx context.Context, req *sdk.Request) err
             break
         }
         if err != nil {
-            return fmt.Errorf("gagal parsing baris CSV: %w", err)
+            return fmt.Errorf("failed to parse CSV row: %w", err)
         }
         n.rows = append(n.rows, record)
     }
     return nil
 }
 
-// 2. Return: Mengembalikan data kanonikal dan metrik baris
+// 2. Return: Emits normalized canonical data and row count metrics
 func (n *StatementNormalizer) Return(ctx context.Context) (*sdk.Response, error) {
     var outBuf bytes.Buffer
     w := csv.NewWriter(&outBuf)
 
-    // Tulis header standar kanonikal Subzero
+    // Write standard canonical Subzero header
     _ = w.Write([]string{"tenant_id", "row_index", "raw_content"})
 
     for i, row := range n.rows {
@@ -237,84 +236,83 @@ func (n *StatementNormalizer) Return(ctx context.Context) (*sdk.Response, error)
 }
 
 func main() {
-    // Jalankan transformer via Subzero SDK runtime
+    // Run transformer via Subzero SDK runtime
     sdk.Run(&StatementNormalizer{})
 }
 ```
 
-> **Alternatif Fungsional:** Anda juga dapat menggunakan handler fungsional satu baris:
+> **Functional Alternative:** You can also register a one-line functional handler:
 > ```go
 > sdk.Handle(func(ctx context.Context, req *sdk.Request) (*sdk.Response, error) {
->     // Logika transformasi singkat
 >     return &sdk.Response{IsSuccess: true, ProcessedRows: 1, Data: req.Payload}, nil
 > })
 > ```
 
 ---
 
-## 7. Model Keamanan & Audit Statis AST
+## 7. Security Model & Static AST Auditing
 
-Sebelum masuk ke tahap kompilasi, Subzero menjalankan pemindaian AST (*Abstract Syntax Tree Static Analysis*) untuk mendeteksi vektor serangan dan celah keamanan:
+Prior to compilation, Subzero subjects the module codebase to AST (*Abstract Syntax Tree Static Analysis*) scanning to identify security threats and policy violations:
 
-### Aturan Impor Terlarang (Forbidden Imports)
-| Paket Terlarang | Alasan Penolakan |
+### Forbidden Imports
+| Forbidden Import | Rejection Rationale |
 | :--- | :--- |
-| `os/exec` | Mencegah eksekusi perintah shell OS atau remote command execution. |
-| `syscall` | Mencegah panggilan kernel traps dan manipulasi proses tingkat rendah. |
-| `unsafe` | Mencegah manipulasi pointer memori bebas di luar batasan sandbox. |
-| `plugin` | Mencegah pemuatan pustaka dinamis (.so) dari luar. |
-| `runtime/cgo` | Mencegah pemanggilan kode biner C asli tanpa perlindungan Wasm. |
+| `os/exec` | Prevents operating system shell invocation and remote command execution. |
+| `syscall` | Prevents direct kernel trap calls and low-level process manipulation. |
+| `unsafe` | Prevents unrestricted arbitrary memory pointer manipulation outside Wasm sandbox bounds. |
+| `plugin` | Prevents runtime loading of unverified native dynamic libraries (`.so`). |
+| `runtime/cgo` | Prevents invocation of un-sandboxed native C binaries. |
 
-### Aturan Vektor Jaringan & Shell
-* **Network Server Listener**: Pemanggilan `net.Listen` atau `net.ListenPacket` otomatis ditolak untuk mencegah worker dijadikan backdoor listener.
-* **Suspicious Shell Literals**: String mencurigakan seperti `/bin/sh`, `/bin/bash`, `cmd.exe`, atau `powershell` yang digabungkan dengan panggilan sistem akan memicu penolakan.
+### Network & Shell Vector Rules
+* **Network Server Listeners**: Calls to `net.Listen` or `net.ListenPacket` are strictly rejected to prevent worker processes from opening rogue backdoor listeners.
+* **Suspicious Shell Literals**: Dangerous shell strings such as `/bin/sh`, `/bin/bash`, `cmd.exe`, or `powershell` combined with system invocations trigger instant rejection.
 
-### Aturan Integritas Arsip
-* **Zip-Slip Protection**: Jalur berkas di dalam tar tidak boleh mengandung manipulasi path traversal (misal: `../../etc/passwd`).
-* **Decompression Bomb Protection**: Ukuran tidak terkompresi dibatasi maksimal **25 MB** dan jumlah berkas maksimal **50 berkas**.
+### Archive Integrity Rules
+* **Zip-Slip Protection**: File paths within the archive must not contain directory traversal sequences (e.g. `../../etc/passwd`).
+* **Decompression Bomb Protection**: Uncompressed payload size is capped at **25 MB** and total entry count is limited to **50 files**.
 
 ---
 
-## 8. Matriks Penolakan Sistem (*Rejection Policy*)
+## 8. System Rejection Matrix (*Rejection Policy*)
 
-| Pelanggaran | Status HTTP | Response Payload |
+| Violation | HTTP Status | Response Payload |
 | :--- | :--- | :--- |
-| Format bukan `.tar.gz` / `.tgz` | `422 Unprocessable Entity` | `{"stage": "structure_verification", "error": "uploaded file must be a .tar.gz bundle..."}` |
-| Berkas `config.zero` hilang / kosong | `422 Unprocessable Entity` | `{"stage": "structure_verification", "error": "structure: package must contain config.zero..."}` |
-| Berkas `readme.md` hilang / kosong | `422 Unprocessable Entity` | `{"stage": "structure_verification", "error": "structure: package must contain readme.md..."}` |
-| Berkas `main.go` tidak memiliki `func main()` | `422 Unprocessable Entity` | `{"stage": "structure_verification", "error": "structure: entrypoint does not contain package main..."}` |
-| Ditemukan impor terlarang / backdoor | `422 Unprocessable Entity` | `{"stage": "security_audit", "error": "Security validation failed...", "audit": {...}}` |
+| File format is not `.tar.gz` / `.tgz` | `422 Unprocessable Entity` | `{"stage": "structure_verification", "error": "uploaded file must be a .tar.gz bundle..."}` |
+| `config.zero` file missing or empty | `422 Unprocessable Entity` | `{"stage": "structure_verification", "error": "structure: package must contain config.zero..."}` |
+| `readme.md` file missing or empty | `422 Unprocessable Entity` | `{"stage": "structure_verification", "error": "structure: package must contain readme.md..."}` |
+| `main.go` lacks `package main` / `func main()` | `422 Unprocessable Entity` | `{"stage": "structure_verification", "error": "structure: entrypoint does not contain package main..."}` |
+| Forbidden import or backdoor detected | `422 Unprocessable Entity` | `{"stage": "security_audit", "error": "Security validation failed...", "audit": {...}}` |
 
 ---
 
-## 9. Alur Kerja Pengembang via `subzero-cli`
+## 9. Developer Workflow via `subzero-cli`
 
-Subzero menyediakan perangkat CLI terpadu untuk mempermudah siklus pengembangan:
+Subzero includes an integrated CLI tool to streamline the development lifecycle:
 
-### 1. Inisialisasi Scaffold Modul Baru
+### 1. Initialize New Module Scaffold
 ```bash
 subzero-cli module init --name currency-normalizer --tenant acme-bank ./currency-normalizer
 ```
-Perintah ini otomatis membuat struktur lengkap:
-* `config.zero` terisi template konfigurasi.
-* `readme.md` terisi kerangka dokumentasi.
-* `main.go` terisi kode awal pembacaan environment.
-* `go.mod` terinisialisasi.
+This generates the complete standard structure:
+* `config.zero` populated with manifest defaults.
+* `readme.md` populated with documentation template.
+* `main.go` implementing the `sdk.Transformer` interface (`Receive` and `Return`).
+* `go.mod` initialized.
 
-### 2. Audit Struktur & Keamanan Lokal
+### 2. Audit Structure & Security Locally
 ```bash
 subzero-cli module audit ./currency-normalizer
 ```
-Memverifikasi kelengkapan struktur dan memindai AST Go tanpa perlu mengunggah ke server.
+Validates directory structure and runs static AST scanning locally without uploading to the server.
 
-### 3. Kemas ke Arsip Produksi
+### 3. Package for Distribution
 ```bash
 subzero-cli module pack -o currency-normalizer.tar.gz ./currency-normalizer
 ```
-Mengemas direktori menjadi arsip aman yang siap diunggah.
+Packs the project into a sanitized `.tar.gz` archive ready for upload.
 
-### 4. Publikasikan ke Server Subzero
+### 4. Publish to Subzero Server
 ```bash
 subzero-cli module publish --server http://localhost:8080 --tenant acme-bank --name currency-normalizer ./currency-normalizer
 ```
-Server akan mengaudit, mengompilasi ke format WebAssembly, dan menyimpannya ke repository modul aktif.
+The server will verify package structure, audit AST security, compile to WebAssembly bytecode, and register the module into the active registry.
