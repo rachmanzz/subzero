@@ -42,41 +42,29 @@ In terminal 2:
 go run ./examples/api-gateway/main.go -port 3000
 ```
 
-### 3. Request an Upload Slot
-In terminal 3:
-```bash
-curl -X POST http://localhost:3000/api/v1/documents/request-upload \
-  -H "Content-Type: application/json" \
-  -d '{"tenant_id": "tenant-acme", "filename": "revenue.csv"}'
+### 3. Open the Interactive Web Portal
+Open your web browser at:
 ```
-Response:
-```json
-{
-  "target_url": "file:///tmp/subzero-storage-demo/tenant-acme/1791778100-revenue.csv",
-  "http_method": "PUT",
-  "storage_reference": "tenant-acme/1791778100-revenue.csv",
-  "expired_at": "2026-10-12T11:22:00Z"
-}
+http://localhost:3000
 ```
+From the web portal:
+1. Enter your Tenant ID (e.g., `acme-corp`) and Action Target (`excel-normalizer`).
+2. Pick any `.csv` or `.xlsx` document.
+3. Click **🚀 Upload & Normalize Document**.
+4. The web portal automatically:
+   - Allocates an ephemeral pre-signed upload URL.
+   - Streams the binary file directly to storage (Zero payload through API gateway).
+   - Dispatches `TaskMessage` to Subzero Supervisor.
+   - Subzero wakes up the worker (cold-start), processes the spreadsheet in sandboxed Wasm, and auto-terminates back to zero.
+   - Displays real-time metrics and processed row counts in the UI!
 
-### 4. Trigger Document Processing
+### 4. Running via Docker Compose
+To run the entire Subzero ecosystem (MinIO + Subzero Admin + Subzero Supervisor + API Gateway) in one command:
 ```bash
-curl -X POST http://localhost:3000/api/v1/documents/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tenant_id": "tenant-acme",
-    "action_target": "csv-validator",
-    "source_uri": "file:///tmp/subzero-storage-demo/tenant-acme/1791778100-revenue.csv"
-  }'
+make up
 ```
-Response:
-```json
-{
-  "task_id": "task-1791778120300",
-  "is_success": true,
-  "processed_rows": 100,
-  "error_message": "",
-  "execution_time": "12.4ms"
-}
-```
-Notice that Subzero cold-started the worker on demand, executed the workload, and released memory when idle!
+Once up:
+* Subzero Management Dashboard: `http://localhost:8080`
+* MinIO Storage Console: `http://localhost:9001` (user: `minioadmin`, pass: `minioadmin`)
+* Interactive API Gateway Demo: `http://localhost:3000`
+

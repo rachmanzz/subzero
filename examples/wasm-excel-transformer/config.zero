@@ -1,0 +1,16 @@
+# Subzero Module Specification (PRD 5.5)
+name: excel-normalizer
+version: 1.0.0
+tenant: acme-corp
+target: wasip1
+entrypoint: main.go
+description: Production B2B CSV and Excel spreadsheet normalizer for Subzero runtime
+memory_limit_pages: 512
+timeout: 10s
+
+# Two-sided Capability Negotiation Permissions (PRD 5.5)
+permissions.host_calls: storage:get_object, logger:debug
+permissions.filesystem.read_only: /tmp/subzero-tenants/in
+permissions.filesystem.read_write: /tmp/subzero-workspace/scratch
+permissions.s3.allowed_prefixes: s3://tenant-vault/
+permissions.files.allowed_extensions: .csv, .xlsx, .json
