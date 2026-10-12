@@ -8,6 +8,7 @@ Welcome to the official technical documentation for **Subzero**, a distributed *
 
 | Document | Description |
 | :--- | :--- |
+| [**0. Project Overview & Architecture Guide (`project-overview-and-architecture.md`)**](project-overview-and-architecture.md) | High-level architectural overview, B2B problem space, end-to-end execution pipeline, `v3/worker` concurrency model, sandboxed worker mechanics, and security design. |
 | [**1. Complete File-by-File Reference (`file-reference.md`)**](file-reference.md) | Exhaustive, file-by-file breakdown of every single file in the codebase, detailing responsibilities, exported types, functions, and dependency flows. |
 | [**2. Protocol & Binary Framing (`protocol.md`)**](protocol.md) | Technical specifications of the binary wire framing (4-byte length prefix + 32-byte HMAC-SHA256 signature), message entity schemas, and serialization codecs. |
 | [**3. Network Transports & Adapters (`transports.md`)**](transports.md) | The `Transport` interface abstraction, Unix Domain Sockets (`ipc`), Raw TCP with mTLS (`tcp`), HTTP Upgrade streaming (`http`), and In-Memory Pipe (`inproc`). |
