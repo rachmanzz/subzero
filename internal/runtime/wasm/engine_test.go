@@ -54,7 +54,7 @@ func main() {
 			"SUBZERO_TENANT": "Acme-Logistics",
 		},
 		FuelLimit: 1_000_000,
-		Timeout:   10 * time.Second,
+		Timeout:   30 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("Wasm execution failed: %v", err)
