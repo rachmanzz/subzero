@@ -227,14 +227,18 @@ func TestTCPTransport_mTLS(t *testing.T) {
 		ServerName: "127.0.0.1",
 	})
 	unauthConn, err := unauthTransport.Dial(ctx, endpoint)
-	if err == nil {
-		// Attempting handshake/read should fail
+	if err != nil {
+		// Connection was rejected during Dial / TLS handshake as expected
+		t.Logf("✓ Unauthenticated client rejected at Dial time: %v", err)
+	} else {
+		// If dial succeeded (e.g. deferred TLS handshake), attempting frame write/read must fail
 		_ = protocol.WriteFrame(unauthConn, testPayload, secretKey)
 		_, readErr := protocol.ReadFrame(unauthConn, secretKey, 0)
-		unauthConn.Close()
+		_ = unauthConn.Close()
 		if readErr == nil {
-			t.Fatal("expected unauthenticated client connection to fail on mTLS listener")
+			t.Fatal("expected unauthenticated client connection to fail on mTLS listener, but frame read succeeded")
 		}
+		t.Logf("✓ Unauthenticated client rejected at handshake/read time: %v", readErr)
 	}
 }
 

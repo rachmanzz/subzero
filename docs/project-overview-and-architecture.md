@@ -110,7 +110,7 @@ User-defined or third-party transformation logic is susceptible to runtime excep
   ```go
   defer func() {
       if r := recover(); r != nil {
-          err = fmt.Errorf("dispatcher: panic recovered in task %q: %v\nstack: %s", task.TaskID, r, debug.Stack())
+          err = fmt.Errorf("dispatcher: panic recovered in task %q: %v\nstack: %s", task.Name(), r, debug.Stack())
       }
   }()
   ```
@@ -268,7 +268,7 @@ permissions.files.allowed_extensions: .csv, .xlsx, .json
 }
 ```
 
-The Subzero host enforces a master `WorkerPolicy` (loaded from JSON via [`pkg/permission/evaluator.go`](../pkg/permission/evaluator.go)):
+The Subzero host enforces a master `WorkerPolicy` (unmarshaled from JSON by `cmd/subzero-worker/main.go` using schemas from [`pkg/permission/evaluator.go`](../pkg/permission/evaluator.go)):
 ```json
 {
   "allowed_host_calls": ["storage:get_object", "storage:put_object", "logger:debug", "logger:info", "logger:error", "metrics:record"],

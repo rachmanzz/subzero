@@ -293,8 +293,16 @@ func VerifyModulePackage(rootPath string) (*ModulePackageInfo, error) {
 		Config:        cfg,
 		MainFile:      mainPath,
 		ReadmePath:    readmePath,
-		ReadmeContent: string(readmeData),
 	}, nil
+}
+
+func hasTraversalSegment(p string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRequestedPermissions(req *permission.ModuleRequest) error {
@@ -303,7 +311,7 @@ func validateRequestedPermissions(req *permission.ModuleRequest) error {
 		if trimmed == "" {
 			continue
 		}
-		if strings.Contains(trimmed, "..") {
+		if hasTraversalSegment(trimmed) {
 			return fmt.Errorf("path traversal forbidden: %q", p)
 		}
 		if !filepath.IsAbs(trimmed) {

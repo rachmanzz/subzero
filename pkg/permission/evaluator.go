@@ -310,11 +310,13 @@ func sanitizeAndValidatePath(p string) (string, error) {
 		return "", fmt.Errorf("%w: path must be absolute %q", ErrPathTraversal, trimmed)
 	}
 
-	clean := filepath.Clean(trimmed)
-	// Check directory traversal in cleaned path
-	if strings.Contains(clean, "..") {
-		return "", fmt.Errorf("%w: traversal detected in %q", ErrPathTraversal, trimmed)
+	for _, part := range strings.Split(filepath.ToSlash(trimmed), "/") {
+		if part == ".." {
+			return "", fmt.Errorf("%w: traversal detected in %q", ErrPathTraversal, trimmed)
+		}
 	}
+
+	clean := filepath.Clean(trimmed)
 
 	// Check against sensitive system directories
 	for _, sens := range sensitiveDirectories {
