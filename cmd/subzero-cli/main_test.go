@@ -213,3 +213,113 @@ func TestCLI_ModuleInit(t *testing.T) {
 	}
 }
 
+func TestCLI_ModuleInspectPolicy(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "cli-test-inspect-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Valid module
+	validModDir := filepath.Join(tmpDir, "valid-mod")
+	_ = os.MkdirAll(validModDir, 0755)
+	_ = os.WriteFile(filepath.Join(validModDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+	_ = os.WriteFile(filepath.Join(validModDir, "go.mod"), []byte("module validmod\ngo 1.22\n"), 0644)
+	_ = os.WriteFile(filepath.Join(validModDir, "readme.md"), []byte("# Valid Mod\n"), 0644)
+	cfgValid := `name: valid-mod
+permissions.host_calls: storage:get_object
+permissions.filesystem.read_only: /tmp/subzero-tenants/in
+permissions.files.allowed_extensions: .csv
+`
+	_ = os.WriteFile(filepath.Join(validModDir, "config.zero"), []byte(cfgValid), 0644)
+
+	// Test 1: Inspect valid module with default policy (offline / local fallback)
+	err = handleModuleInspectPolicy([]string{
+		"-module", validModDir,
+		"-server", "http://127.0.0.1:1", // intentionally unreachable server to test local fallback
+	})
+	if err != nil {
+		t.Fatalf("expected module inspection to succeed, got: %v", err)
+	}
+
+	// Test 2: Inspect module with forbidden host calls against custom policy
+	policyFile := filepath.Join(tmpDir, "strict_policy.json")
+	strictPolicy := `{
+		"allowed_host_calls": ["logger:info"],
+		"filesystem": { "allowed_read_only_roots": ["/data"] }
+	}`
+	_ = os.WriteFile(policyFile, []byte(strictPolicy), 0644)
+
+	err = handleModuleInspectPolicy([]string{
+		"-module", validModDir,
+		"-policy", policyFile,
+		"-server", "http://127.0.0.1:1",
+	})
+	if err == nil {
+		t.Fatal("expected inspection failure due to forbidden host call, got nil")
+	}
+
+	// Test 3: Inspect module against live Management API server
+	store, err := management.NewFileStore(filepath.Join(tmpDir, "store"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgmtServer, err := management.NewServer(management.ServerConfig{
+		Compiler: management.NewGoCompiler(""),
+		Store:    store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(mgmtServer.Routes())
+	defer ts.Close()
+
+	err = handleModuleInspectPolicy([]string{
+		"-module", validModDir,
+		"-server", ts.URL,
+	})
+	if err != nil {
+		t.Fatalf("inspection against management server failed: %v", err)
+	}
+}
+
+func TestCLI_TaskRequestUpload(t *testing.T) {
+	// Test 1: Local file upload slot allocation (success with valid TTL)
+	err := handleTaskRequestUpload([]string{
+		"-ref", "file:///tmp/subzero-test/input.csv",
+		"-ttl", "10m",
+	})
+	if err != nil {
+		t.Fatalf("expected request-upload to succeed, got: %v", err)
+	}
+
+	// Test 2: S3 upload slot allocation
+	err = handleTaskRequestUpload([]string{
+		"-ref", "s3://tenant-vault/dataset.csv",
+		"-ttl", "15m",
+		"-endpoint", "http://localhost:9000",
+		"-access-key", "minioadmin",
+		"-secret-key", "minioadmin",
+	})
+	if err != nil {
+		t.Fatalf("expected s3 request-upload to succeed, got: %v", err)
+	}
+
+	// Test 3: Rejection of TTL exceeding 15 minutes (PRD 7)
+	err = handleTaskRequestUpload([]string{
+		"-ref", "s3://tenant-vault/dataset.csv",
+		"-ttl", "16m",
+	})
+	if err == nil {
+		t.Fatal("expected TTL > 15m to be rejected, got nil")
+	}
+
+	// Test 4: Missing storage reference error
+	err = handleTaskRequestUpload([]string{
+		"-ttl", "5m",
+	})
+	if err == nil {
+		t.Fatal("expected missing -ref error, got nil")
+	}
+}
+

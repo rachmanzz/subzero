@@ -14,7 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rachmanzz/subzero/internal/storage"
+	"github.com/rachmanzz/subzero/internal/storage/local"
+	"github.com/rachmanzz/subzero/internal/storage/s3"
 	"github.com/rachmanzz/subzero/pkg/management"
+	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/rachmanzz/subzero/pkg/producer"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 	_ "github.com/rachmanzz/subzero/pkg/transport/http"
@@ -64,15 +68,17 @@ Usage:
   subzero-cli <command> [subcommand] [flags]
 
 Available Commands:
-  module       Manage, audit, package, and publish tenant Wasm modules
-    init       Scaffold a new standardized module directory (config.zero, readme.md, main.go)
-    pack       Package a Go source directory into a safe .tar.gz bundle
-    audit      Audit a Go directory or .tar.gz archive for security & backdoor vectors
-    publish    Audit, bundle, and push a module to the Subzero Management API
-    list       List registered Wasm modules on the management server
-    download   Download a published .wasm artifact from the management server
-  task         Submit and benchmark tasks against the worker/supervisor engine
-    submit     Submit a single data normalization task to a worker
+  module         Manage, audit, package, and publish tenant Wasm modules
+    init         Scaffold a new standardized module directory (config.zero, readme.md, main.go)
+    pack         Package a Go source directory into a safe .tar.gz bundle
+    audit        Audit a Go directory or .tar.gz archive for security & backdoor vectors
+    publish      Audit, bundle, and push a module to the Subzero Management API
+    list         List registered Wasm modules on the management server
+    download     Download a published .wasm artifact from the management server
+    inspect-policy Inspect module capabilities and test compliance against worker policy (PRD 3 & 5.5)
+  task           Submit and benchmark tasks against the worker/supervisor engine
+    submit       Submit a single data normalization task to a worker
+    request-upload Allocate ephemeral pre-signed direct upload slot (PRD 5.3 & 7)
 
 Run 'subzero-cli <command> <subcommand> -h' for more details on a command.`)
 }
@@ -83,7 +89,7 @@ Run 'subzero-cli <command> <subcommand> -h' for more details on a command.`)
 
 func handleModuleCommand(args []string) error {
 	if len(args) == 0 {
-		fmt.Println(`Usage: subzero-cli module <init | pack | audit | publish | list | download> [options]`)
+		fmt.Println(`Usage: subzero-cli module <init | pack | audit | publish | list | download | inspect-policy> [options]`)
 		return nil
 	}
 
@@ -101,6 +107,8 @@ func handleModuleCommand(args []string) error {
 		return handleModuleList(args[1:])
 	case "download":
 		return handleModuleDownload(args[1:])
+	case "inspect-policy":
+		return handleModuleInspectPolicy(args[1:])
 	default:
 		return fmt.Errorf("unknown module subcommand %q. Run 'subzero-cli module' for help", sub)
 	}
@@ -593,11 +601,282 @@ func printAuditReport(report *management.AuditReport) {
 	}
 }
 
+func handleModuleInspectPolicy(args []string) error {
+	fs := flag.NewFlagSet("module inspect-policy", flag.ExitOnError)
+	moduleID := fs.String("id", "", "Module ID registered on the management server")
+	modulePath := fs.String("module", "", "Local module directory or .tar.gz bundle")
+	policyPath := fs.String("policy", "", "Path to worker policy JSON file")
+	serverURL := fs.String("server", "http://localhost:8080", "Subzero Management Server URL")
+
+	positionals, err := parseFlexible(fs, args)
+	if err != nil {
+		return err
+	}
+	if *modulePath == "" && len(positionals) > 0 {
+		*modulePath = positionals[0]
+	}
+
+	if *moduleID == "" && *modulePath == "" {
+		return fmt.Errorf("either -id (server module) or -module (local module directory/bundle) must be provided")
+	}
+
+	var workerPolicy *permission.WorkerPolicy
+	if *policyPath != "" {
+		policyData, err := os.ReadFile(*policyPath)
+		if err != nil {
+			return fmt.Errorf("failed to read policy file: %w", err)
+		}
+		var wp permission.WorkerPolicy
+		if err := json.Unmarshal(policyData, &wp); err != nil {
+			return fmt.Errorf("failed to parse policy json: %w", err)
+		}
+		workerPolicy = &wp
+	}
+
+	var resp management.InspectPolicyResponse
+
+	if *moduleID != "" && *modulePath == "" {
+		// Inspect published module on server
+		endpoint := fmt.Sprintf("%s/api/modules/%s/inspect-policy", strings.TrimRight(*serverURL, "/"), *moduleID)
+		reqPayload := management.InspectPolicyRequest{
+			WorkerPolicy: workerPolicy,
+		}
+		payloadBytes, _ := json.Marshal(reqPayload)
+
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payloadBytes))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		httpResp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to query management server: %w", err)
+		}
+		defer httpResp.Body.Close()
+
+		if httpResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(httpResp.Body)
+			return fmt.Errorf("inspection failed (HTTP %d): %s", httpResp.StatusCode, string(body))
+		}
+
+		if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+			return fmt.Errorf("failed to decode response: %w", err)
+		}
+	} else {
+		// Inspect local module directory or bundle
+		var modReq *permission.ModuleRequest
+		modID := *moduleID
+		if modID == "" {
+			modID = filepath.Base(*modulePath)
+		}
+
+		fi, err := os.Stat(*modulePath)
+		if err != nil {
+			return fmt.Errorf("cannot access module path %s: %w", *modulePath, err)
+		}
+
+		var cfgZero *management.ConfigZero
+		if fi.IsDir() {
+			pkgInfo, err := management.VerifyModulePackage(*modulePath)
+			if err != nil {
+				return fmt.Errorf("module package verification failed: %w", err)
+			}
+			cfgZero = pkgInfo.Config
+		} else if strings.HasSuffix(*modulePath, ".tar.gz") || strings.HasSuffix(*modulePath, ".tgz") {
+			tempDir, err := os.MkdirTemp("", "subzero-inspect-unpack-*")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(tempDir)
+
+			f, err := os.Open(*modulePath)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+
+			if err := management.SafeUnpackTarGz(f, tempDir, management.DefaultArchiveLimits()); err != nil {
+				return fmt.Errorf("failed to unpack archive: %w", err)
+			}
+			pkgInfo, err := management.VerifyModulePackage(tempDir)
+			if err != nil {
+				return fmt.Errorf("archive module verification failed: %w", err)
+			}
+			cfgZero = pkgInfo.Config
+		} else if strings.HasSuffix(*modulePath, "config.zero") {
+			data, err := os.ReadFile(*modulePath)
+			if err != nil {
+				return err
+			}
+			c, err := management.ParseConfigZero(data)
+			if err != nil {
+				return err
+			}
+			cfgZero = c
+		} else {
+			return fmt.Errorf("unsupported module format: must be directory, .tar.gz bundle, or config.zero file")
+		}
+
+		if cfgZero != nil {
+			modReq = cfgZero.Permissions
+			if modID == "" || modID == filepath.Base(*modulePath) {
+				modID = cfgZero.Name
+			}
+		}
+
+		// Try sending to management server endpoint /api/inspect-policy
+		endpoint := fmt.Sprintf("%s/api/inspect-policy", strings.TrimRight(*serverURL, "/"))
+		reqPayload := management.InspectPolicyRequest{
+			ModuleRequest: modReq,
+			WorkerPolicy:  workerPolicy,
+		}
+		payloadBytes, _ := json.Marshal(reqPayload)
+
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payloadBytes))
+		var serverSuccess bool
+		if err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			client := &http.Client{Timeout: 5 * time.Second}
+			httpResp, err := client.Do(req)
+			if err == nil {
+				defer httpResp.Body.Close()
+				if httpResp.StatusCode == http.StatusOK {
+					if err := json.NewDecoder(httpResp.Body).Decode(&resp); err == nil {
+						serverSuccess = true
+					}
+				}
+			}
+		}
+
+		// Fallback to local evaluation if server was unreachable or not running
+		if !serverSuccess {
+			wp := workerPolicy
+			if wp == nil {
+				defPolicy := permission.DefaultWorkerPolicy()
+				wp = &defPolicy
+			}
+			eff, evalErr := permission.Evaluate(wp, modReq)
+			resp = management.InspectPolicyResponse{
+				ModuleID:             modID,
+				Allowed:              evalErr == nil,
+				RequestedPermissions: modReq,
+				EffectivePermissions: eff,
+			}
+			if evalErr != nil {
+				resp.Error = evalErr.Error()
+			}
+		}
+	}
+
+	printInspectReport(&resp)
+	if !resp.Allowed {
+		return fmt.Errorf("module capability negotiation failed: %s", resp.Error)
+	}
+	return nil
+}
+
+func printInspectReport(resp *management.InspectPolicyResponse) {
+	fmt.Println("📋 Module Capability Policy Inspection (PRD 3 & 5.5)")
+	if resp.ModuleID != "" {
+		fmt.Printf("  Module ID   : %s\n", resp.ModuleID)
+	}
+	if resp.TenantID != "" {
+		fmt.Printf("  Tenant ID   : %s\n", resp.TenantID)
+	}
+	if resp.Allowed {
+		fmt.Println("  Decision    : 🛡️ APPROVED (Module complies with Worker Policy)")
+	} else {
+		fmt.Println("  Decision    : ⛔ REJECTED")
+		if resp.Error != "" {
+			fmt.Printf("  Reason      : %s\n", resp.Error)
+		}
+	}
+
+	if resp.RequestedPermissions != nil {
+		fmt.Println("  Requested Capabilities:")
+		if len(resp.RequestedPermissions.HostCalls) > 0 {
+			fmt.Printf("    Host Calls          : %v\n", resp.RequestedPermissions.HostCalls)
+		}
+		if len(resp.RequestedPermissions.Filesystem.ReadOnly) > 0 {
+			fmt.Printf("    Read-Only FS        : %v\n", resp.RequestedPermissions.Filesystem.ReadOnly)
+		}
+		if len(resp.RequestedPermissions.Filesystem.ReadWrite) > 0 {
+			fmt.Printf("    Read-Write FS       : %v\n", resp.RequestedPermissions.Filesystem.ReadWrite)
+		}
+		if len(resp.RequestedPermissions.S3.AllowedPrefixes) > 0 {
+			fmt.Printf("    S3 Allowed Prefixes : %v\n", resp.RequestedPermissions.S3.AllowedPrefixes)
+		}
+		if len(resp.RequestedPermissions.Files.AllowedExtensions) > 0 {
+			fmt.Printf("    Allowed Extensions  : %v\n", resp.RequestedPermissions.Files.AllowedExtensions)
+		}
+		if resp.RequestedPermissions.Files.MaxFileSizeMB > 0 {
+			fmt.Printf("    Max File Size (MB)  : %d MB\n", resp.RequestedPermissions.Files.MaxFileSizeMB)
+		}
+	}
+
+	if resp.EffectivePermissions != nil && resp.Allowed {
+		fmt.Println("  Effective Permissions Granted:")
+		if len(resp.EffectivePermissions.HostCalls) > 0 {
+			var calls []string
+			for k, v := range resp.EffectivePermissions.HostCalls {
+				if v {
+					calls = append(calls, k)
+				}
+			}
+			fmt.Printf("    Allowed Host Calls  : %v\n", calls)
+		}
+		if len(resp.EffectivePermissions.Filesystem.ReadOnly) > 0 {
+			fmt.Printf("    Allowed Read Paths  : %v\n", resp.EffectivePermissions.Filesystem.ReadOnly)
+		}
+		if len(resp.EffectivePermissions.Filesystem.ReadWrite) > 0 {
+			fmt.Printf("    Allowed Write Paths : %v\n", resp.EffectivePermissions.Filesystem.ReadWrite)
+		}
+		if len(resp.EffectivePermissions.S3.AllowedPrefixes) > 0 {
+			fmt.Printf("    Allowed S3 Prefixes : %v\n", resp.EffectivePermissions.S3.AllowedPrefixes)
+		}
+		if len(resp.EffectivePermissions.Files.AllowedExtensions) > 0 {
+			fmt.Printf("    Allowed Extensions  : %v\n", resp.EffectivePermissions.Files.AllowedExtensions)
+		}
+		if resp.EffectivePermissions.Files.MaxFileSizeBytes > 0 {
+			fmt.Printf("    Max File Size       : %.2f MB\n", float64(resp.EffectivePermissions.Files.MaxFileSizeBytes)/(1024*1024))
+		}
+	}
+}
+
 // ============================================================================
 // TASK COMMAND HANDLERS
 // ============================================================================
 
 func handleTaskCommand(args []string) error {
+	if len(args) == 0 {
+		return handleTaskSubmit(args)
+	}
+
+	sub := args[0]
+	switch sub {
+	case "submit":
+		return handleTaskSubmit(args[1:])
+	case "request-upload":
+		return handleTaskRequestUpload(args[1:])
+	case "-h", "--help", "help":
+		fmt.Println(`Usage: subzero-cli task <submit | request-upload> [flags]
+
+Available Subcommands:
+  submit          Submit a normalization task to a worker
+  request-upload  Allocate an ephemeral pre-signed direct upload slot (PRD 5.3 & 7)`)
+		return nil
+	default:
+		// Fallback for direct flags (e.g. subzero-cli task -target=...)
+		if strings.HasPrefix(sub, "-") {
+			return handleTaskSubmit(args)
+		}
+		return fmt.Errorf("unknown task subcommand %q. Run 'subzero-cli task -h' for help", sub)
+	}
+}
+
+func handleTaskSubmit(args []string) error {
 	fs := flag.NewFlagSet("task submit", flag.ExitOnError)
 	scheme := fs.String("scheme", "unix", "Transport scheme (unix, tcp, http)")
 	endpoint := fs.String("endpoint", "/tmp/subzero-worker.sock", "Worker socket or address")
@@ -639,6 +918,97 @@ func handleTaskCommand(args []string) error {
 	fmt.Printf("  Processed Rows : %d\n", res.ProcessedRows)
 	fmt.Printf("  Round-Trip     : %v\n", latency)
 	fmt.Printf("  Execution Time : %s\n", res.ExecutionTime)
+	return nil
+}
+
+func handleTaskRequestUpload(args []string) error {
+	fs := flag.NewFlagSet("task request-upload", flag.ExitOnError)
+	storageRef := fs.String("ref", "", "Storage reference URI (e.g. s3://tenant-vault/input.csv, file:///tmp/input.csv)")
+	ttl := fs.Duration("ttl", 15*time.Minute, "Expiration TTL (max 15 minutes per PRD 7)")
+	scheme := fs.String("scheme", "", "Storage scheme (s3, minio, file). Inferred from -ref if omitted")
+	bucket := fs.String("bucket", "", "S3 bucket name (inferred from s3://bucket/key if omitted)")
+	endpoint := fs.String("endpoint", "", "Custom S3 / MinIO endpoint URL (e.g. http://localhost:9000)")
+	region := fs.String("region", "us-east-1", "S3 region")
+	accessKey := fs.String("access-key", "", "S3 access key")
+	secretKey := fs.String("secret-key", "", "S3 secret key")
+	pathStyle := fs.Bool("path-style", false, "Use path style addressing (recommended for MinIO/LocalStack)")
+
+	positionals, err := parseFlexible(fs, args)
+	if err != nil {
+		return err
+	}
+	if *storageRef == "" && len(positionals) > 0 {
+		*storageRef = positionals[0]
+	}
+	if *storageRef == "" {
+		return fmt.Errorf("storage reference (-ref) is required")
+	}
+
+	validTTL, err := storage.ValidateEphemeralTTL(*ttl)
+	if err != nil {
+		return fmt.Errorf("invalid ttl: %w", err)
+	}
+
+	sc := *scheme
+	if sc == "" {
+		if strings.HasPrefix(*storageRef, "s3://") || strings.HasPrefix(*storageRef, "minio://") {
+			sc = "s3"
+		} else {
+			sc = "file"
+		}
+	}
+
+	var slot *protocol.UploadSlotResponse
+	if sc == "s3" || sc == "minio" {
+		b := *bucket
+		if b == "" {
+			trimmed := strings.TrimPrefix(*storageRef, "s3://")
+			trimmed = strings.TrimPrefix(trimmed, "minio://")
+			parts := strings.SplitN(trimmed, "/", 2)
+			if len(parts) > 0 && parts[0] != "" {
+				b = parts[0]
+			}
+		}
+		if b == "" {
+			return fmt.Errorf("s3 bucket name required or must be present in reference (e.g. s3://bucket/key)")
+		}
+
+		usePathStyle := *pathStyle
+		if *endpoint != "" && !usePathStyle {
+			usePathStyle = true
+		}
+
+		d, err := s3.New(s3.Config{
+			Bucket:       b,
+			Region:       *region,
+			Endpoint:     *endpoint,
+			AccessKey:    *accessKey,
+			SecretKey:    *secretKey,
+			UsePathStyle: usePathStyle,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to initialize s3 driver: %w", err)
+		}
+
+		slot, err = d.GenerateUploadSlot(context.Background(), *storageRef, validTTL)
+		if err != nil {
+			return fmt.Errorf("failed to generate upload slot: %w", err)
+		}
+	} else {
+		// Local file driver
+		baseDir := os.TempDir()
+		d := local.New(baseDir)
+		slot, err = d.GenerateUploadSlot(context.Background(), *storageRef, validTTL)
+		if err != nil {
+			return fmt.Errorf("failed to generate upload slot: %w", err)
+		}
+	}
+
+	fmt.Println("✓ Pre-signed Upload Slot Allocated! (PRD 5.3 & 7)")
+	fmt.Printf("  Storage Reference : %s\n", slot.StorageReference)
+	fmt.Printf("  HTTP Method       : %s\n", slot.HTTPMethod)
+	fmt.Printf("  Target URL        : %s\n", slot.TargetURL)
+	fmt.Printf("  Expires At        : %s (TTL: %v)\n", slot.ExpiredAt.Format(time.RFC3339), validTTL)
 	return nil
 }
 
