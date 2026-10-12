@@ -78,6 +78,12 @@ func NewEngine(ctx context.Context, cfg Config) (*Engine, error) {
 		return nil, fmt.Errorf("wasm: failed to instantiate wasi: %w", err)
 	}
 
+	// Instantiate subzero_host host function module
+	if err := RegisterHostModule(ctx, rt); err != nil {
+		_ = rt.Close(ctx)
+		return nil, fmt.Errorf("wasm: failed to instantiate subzero_host: %w", err)
+	}
+
 	return &Engine{
 		cfg: cfg,
 		rt:  rt,

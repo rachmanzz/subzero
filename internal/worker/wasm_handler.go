@@ -41,6 +41,10 @@ type WasmHandlerConfig struct {
 	Resolver              WasmModuleResolver
 	WorkerPolicy          *permission.WorkerPolicy
 	ModuleRequestResolver ModuleRequestResolver
+	StorageGet            func(ctx context.Context, key string) ([]byte, error)
+	StoragePut            func(ctx context.Context, key string, data []byte) error
+	LogHandler            func(level int, msg string)
+	MetricHandler         func(name string, value float64)
 }
 
 // NewWasmHandler creates a Worker HandlerFunc using default worker policy.
@@ -192,7 +196,17 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 			}
 		}
 
-		execRes, err := cfg.Engine.Execute(ctx, wasmBytes, execOpts)
+		// Attach HostContext with effective permissions and callbacks
+		hostCtx := &wasm.HostContext{
+			Permissions:   effective,
+			StorageGet:    cfg.StorageGet,
+			StoragePut:    cfg.StoragePut,
+			LogHandler:    cfg.LogHandler,
+			MetricHandler: cfg.MetricHandler,
+		}
+		execCtx := wasm.WithHostContext(ctx, hostCtx)
+
+		execRes, err := cfg.Engine.Execute(execCtx, wasmBytes, execOpts)
 		var execDuration string
 		if execRes != nil {
 			execDuration = execRes.Duration.String()
