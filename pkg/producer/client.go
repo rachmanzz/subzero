@@ -2,10 +2,12 @@ package producer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/rachmanzz/fiber-extras/v3/queue"
 	"github.com/rachmanzz/subzero/internal/storage"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 	"github.com/rachmanzz/subzero/pkg/transport"
@@ -23,6 +25,7 @@ type Config struct {
 	SecretKey     []byte        // HMAC-SHA256 signature key
 	Timeout       time.Duration // Network request timeout
 	StorageDriver storage.Driver
+	QueueDriver   queue.Driver  // Optional distributed queue driver (fiber-extras/v3/queue)
 }
 
 // Client provides an API SDK for Main API Gateways to interface with Subzero.
@@ -36,19 +39,22 @@ func New(cfg Config) (*Client, error) {
 	if cfg.Scheme == "" {
 		cfg.Scheme = "unix"
 	}
-	if cfg.Endpoint == "" {
-		return nil, ErrEmptyEndpoint
-	}
-	if len(cfg.SecretKey) == 0 {
-		return nil, protocol.ErrEmptySecretKey
-	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 30 * time.Second
 	}
 
-	tr, err := transport.Get(cfg.Scheme)
-	if err != nil {
-		return nil, fmt.Errorf("producer: transport error: %w", err)
+	var tr transport.Transport
+	if cfg.Endpoint != "" {
+		if len(cfg.SecretKey) == 0 {
+			return nil, protocol.ErrEmptySecretKey
+		}
+		var err error
+		tr, err = transport.Get(cfg.Scheme)
+		if err != nil {
+			return nil, fmt.Errorf("producer: transport error: %w", err)
+		}
+	} else if cfg.QueueDriver == nil {
+		return nil, ErrEmptyEndpoint
 	}
 
 	return &Client{
@@ -69,6 +75,9 @@ func (c *Client) RequestUploadSlot(ctx context.Context, storageRef string, ttl t
 func (c *Client) SubmitTask(ctx context.Context, task *protocol.TaskMessage) (*protocol.ResultMessage, error) {
 	if task == nil {
 		return nil, ErrNilTask
+	}
+	if c.tr == nil || c.cfg.Endpoint == "" {
+		return nil, errors.New("producer: direct RPC transport endpoint not configured")
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
@@ -101,3 +110,47 @@ func (c *Client) SubmitTask(ctx context.Context, task *protocol.TaskMessage) (*p
 
 	return result, nil
 }
+
+// EnqueueTask enqueues a TaskMessage into the configured queue driver.
+// This allows Main API Gateways to submit tasks asynchronously to the distributed queue broker.
+func (c *Client) EnqueueTask(ctx context.Context, topic string, task *protocol.TaskMessage, opts ...queue.DispatchOption) error {
+	if task == nil {
+		return ErrNilTask
+	}
+	if topic == "" {
+		return errors.New("producer: topic cannot be empty")
+	}
+	if c.cfg.QueueDriver == nil {
+		return errors.New("producer: queue driver not configured")
+	}
+
+	payload, err := json.Marshal(task)
+	if err != nil {
+		return fmt.Errorf("producer: marshal task failed: %w", err)
+	}
+
+	msg := queue.NewMessage(topic, payload, opts...)
+	return c.cfg.QueueDriver.Enqueue(ctx, msg)
+}
+
+// EnqueueWithDriver enqueues a TaskMessage using an explicitly provided queue driver.
+func (c *Client) EnqueueWithDriver(ctx context.Context, driver queue.Driver, topic string, task *protocol.TaskMessage, opts ...queue.DispatchOption) error {
+	if task == nil {
+		return ErrNilTask
+	}
+	if driver == nil {
+		return errors.New("producer: queue driver cannot be nil")
+	}
+	if topic == "" {
+		return errors.New("producer: topic cannot be empty")
+	}
+
+	payload, err := json.Marshal(task)
+	if err != nil {
+		return fmt.Errorf("producer: marshal task failed: %w", err)
+	}
+
+	msg := queue.NewMessage(topic, payload, opts...)
+	return driver.Enqueue(ctx, msg)
+}
+

@@ -2,10 +2,12 @@ package producer_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/rachmanzz/fiber-extras/v3/queue"
 	"github.com/rachmanzz/subzero/internal/storage/local"
 	"github.com/rachmanzz/subzero/internal/worker"
 	"github.com/rachmanzz/subzero/pkg/producer"
@@ -86,3 +88,78 @@ func TestProducerClientE2E(t *testing.T) {
 		t.Fatalf("unexpected task result: %+v", res)
 	}
 }
+
+func TestProducerClientQueueIntegration(t *testing.T) {
+	memDriver := queue.NewMemoryDriver()
+
+	// 1. Client with QueueDriver configured
+	client, err := producer.New(producer.Config{
+		QueueDriver: memDriver,
+	})
+	if err != nil {
+		t.Fatalf("producer.New with QueueDriver failed: %v", err)
+	}
+
+	task := &protocol.TaskMessage{
+		TaskID:       "task-queue-1",
+		TenantID:     "tenant-acme",
+		ActionTarget: "csv-normalizer",
+		SourceURI:    "s3://bucket/tenant-acme/file.csv",
+	}
+
+	// Submit via direct RPC should fail since no endpoint was set
+	_, err = client.SubmitTask(context.Background(), task)
+	if err == nil {
+		t.Fatal("expected SubmitTask to fail when endpoint not configured")
+	}
+
+	// 2. EnqueueTask into driver
+	topic := "subzero.tenant-acme.tasks"
+	err = client.EnqueueTask(context.Background(), topic, task, queue.WithPriority(queue.PriorityHigh))
+	if err != nil {
+		t.Fatalf("EnqueueTask failed: %v", err)
+	}
+
+	// 3. Dequeue and verify
+	deliveries, err := memDriver.Dequeue(context.Background(), queue.DequeueRequest{
+		BatchSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("Dequeue failed: %v", err)
+	}
+	if len(deliveries) != 1 {
+		t.Fatalf("expected 1 delivery, got %d", len(deliveries))
+	}
+
+	var dequeuedTask protocol.TaskMessage
+	if err := json.Unmarshal(deliveries[0].Message.Payload, &dequeuedTask); err != nil {
+		t.Fatalf("unmarshal payload failed: %v", err)
+	}
+
+	if dequeuedTask.TaskID != task.TaskID || dequeuedTask.TenantID != task.TenantID {
+		t.Fatalf("unexpected dequeued task: %+v", dequeuedTask)
+	}
+
+	// 4. Test EnqueueWithDriver with separate driver
+	separateDriver := queue.NewMemoryDriver()
+	err = client.EnqueueWithDriver(context.Background(), separateDriver, "topic-separate", task)
+	if err != nil {
+		t.Fatalf("EnqueueWithDriver failed: %v", err)
+	}
+
+	deliveries2, err := separateDriver.Dequeue(context.Background(), queue.DequeueRequest{
+		BatchSize: 5,
+	})
+	if err != nil || len(deliveries2) != 1 {
+		t.Fatalf("expected 1 delivery from separate driver, err: %v, len: %d", err, len(deliveries2))
+	}
+
+	// 5. Test error validation
+	if err := client.EnqueueTask(context.Background(), "", task); err == nil {
+		t.Fatal("expected error on empty topic")
+	}
+	if err := client.EnqueueTask(context.Background(), "topic", nil); err == nil {
+		t.Fatal("expected error on nil task")
+	}
+}
+

@@ -76,3 +76,19 @@ type Watchdog struct {
 * **`ActivityStarted()`**: Called when a frame arrives. Increments the active counter and stops the countdown timer.
 * **`ActivityFinished()`**: Called when a frame execution completes. Decrements the active counter. If no active jobs remain, it starts a timer for `timeout` duration.
 * **`onTimeout`**: Executed on expiry, triggering graceful worker closure and process exit.
+
+---
+
+## 4. Distributed Persistent Queue Integration (`v3/queue`)
+
+To bridge asynchronous task ingestion from Main API Gateways to Subzero's Supervisor, Subzero integrates directly with [`github.com/rachmanzz/fiber-extras/v3/queue`](https://github.com/rachmanzz/fiber-extras/tree/main/v3/queue).
+
+### Key Features
+1. **Producer Task Enqueueing**:
+   * API Gateways use `pkg/producer.Client.EnqueueTask()` or `EnqueueWithDriver()` to push `TaskMessage` payloads with tenant priority ordering (`queue.WithPriority(queue.PriorityHigh)`).
+2. **Supervisor Queue Consumer**:
+   * Configured via `supervisor.DispatcherConfig.QueueDriver` (supports MemoryDriver, Redis, NATS, PostgreSQL).
+   * Automatically launches a background `queue.Consumer` inside `d.Start()` and gracefully terminates in `d.Stop()`.
+3. **Queue Handler Registration**:
+   * Handlers registered via `d.RegisterQueueHandler(topic, handler)` automatically decode incoming `protocol.TaskMessage` objects and execute them through the supervisor's `worker.Dispatcher` engine with full panic recovery and `SubWorkerPool` fan-out support.
+

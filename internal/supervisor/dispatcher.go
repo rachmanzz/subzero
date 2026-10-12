@@ -2,10 +2,15 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
+
+	"github.com/rachmanzz/fiber-extras/v3/queue"
+	"github.com/rachmanzz/fiber-extras/v3/worker"
+	"github.com/rachmanzz/subzero/pkg/protocol"
 )
 
 var (
@@ -14,26 +19,27 @@ var (
 	ErrNilTask          = errors.New("dispatcher: cannot dispatch nil task")
 )
 
-// Task defines an executable unit of work handled by the Dispatcher.
-type Task interface {
-	Name() string
-	Execute(ctx context.Context, pool SubWorkerPool) error
-}
+// Task defines an executable unit of work handled by the Dispatcher (aliases fiber-extras/v3/worker.Task).
+type Task = worker.Task
 
 // SubTaskFunc represents a sub-task function executed concurrently by a sub-worker.
-type SubTaskFunc func(ctx context.Context) error
+type SubTaskFunc = worker.SubTaskFunc
 
 // SubWorkerPool provides a fan-out mechanism to run sub-tasks in parallel within a parent task.
-type SubWorkerPool interface {
-	Go(fn SubTaskFunc)
-	Wait() error
+type SubWorkerPool = worker.SubWorkerPool
+
+// NewTaskFunc creates a simple Task implementation wrapping a function.
+func NewTaskFunc(name string, run func(ctx context.Context, pool SubWorkerPool) error) Task {
+	return worker.NewTaskFunc(name, run)
 }
 
 // DispatcherConfig configures the task dispatcher engine.
 type DispatcherConfig struct {
-	Concurrency int // Maximum number of concurrent tasks (throttling semaphore)
-	QueueSize   int // Maximum in-memory task queue buffer
-	SubLimit    int // Maximum parallel sub-workers per task
+	Concurrency int          // Maximum number of concurrent tasks (throttling semaphore)
+	QueueSize   int          // Maximum in-memory task queue buffer
+	SubLimit    int          // Maximum parallel sub-workers per task
+	QueueDriver queue.Driver // Optional persistent queue driver from fiber-extras/v3/queue (e.g. MemoryDriver, Redis, NATS)
+	QueueRouter *queue.Router
 }
 
 // DefaultDispatcherConfig returns sensible defaults.
@@ -45,16 +51,18 @@ func DefaultDispatcherConfig() DispatcherConfig {
 	}
 }
 
-// Dispatcher coordinates task queueing, throttling, panic recovery, and sub-worker fan-out.
+// Dispatcher coordinates task queueing, throttling, panic recovery, sub-worker fan-out, and queue consumption.
 type Dispatcher struct {
-	cfg       DispatcherConfig
-	taskQueue chan Task
-	semaphore chan struct{}
-	wg        sync.WaitGroup
-	quit      chan struct{}
-	started   bool
-	closed    bool
-	mu        sync.RWMutex
+	cfg           DispatcherConfig
+	taskQueue     chan Task
+	semaphore     chan struct{}
+	wg            sync.WaitGroup
+	quit          chan struct{}
+	queueRouter   *queue.Router
+	queueConsumer *queue.Consumer
+	started       bool
+	closed        bool
+	mu            sync.RWMutex
 }
 
 // NewDispatcher creates a new Dispatcher with the given configuration.
@@ -69,15 +77,26 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 		cfg.SubLimit = 8
 	}
 
-	return &Dispatcher{
+	d := &Dispatcher{
 		cfg:       cfg,
 		taskQueue: make(chan Task, cfg.QueueSize),
 		semaphore: make(chan struct{}, cfg.Concurrency),
 		quit:      make(chan struct{}),
 	}
+
+	if cfg.QueueDriver != nil {
+		router := cfg.QueueRouter
+		if router == nil {
+			router = queue.NewRouter()
+		}
+		d.queueRouter = router
+		d.queueConsumer = queue.NewConsumer(cfg.QueueDriver, router, d)
+	}
+
+	return d
 }
 
-// Start boots the background worker goroutines.
+// Start boots the background worker goroutines and starts the queue consumer if configured.
 func (d *Dispatcher) Start() {
 	d.mu.Lock()
 	if d.started || d.closed {
@@ -85,11 +104,16 @@ func (d *Dispatcher) Start() {
 		return
 	}
 	d.started = true
+	consumer := d.queueConsumer
 	d.mu.Unlock()
 
 	for i := 0; i < d.cfg.Concurrency; i++ {
 		d.wg.Add(1)
 		go d.workerLoop()
+	}
+
+	if consumer != nil {
+		consumer.Start()
 	}
 }
 
@@ -178,7 +202,29 @@ func (d *Dispatcher) ExecuteSync(ctx context.Context, task Task) error {
 	return d.runTaskSafely(ctx, task)
 }
 
-// Stop gracefully shuts down the dispatcher, waiting for ongoing tasks to finish.
+// RegisterQueueHandler registers a topic handler on the persistent queue.
+// When messages arrive on the topic, they are decoded into protocol.TaskMessage and executed with SubWorkerPool.
+func (d *Dispatcher) RegisterQueueHandler(topic string, handler func(ctx context.Context, task *protocol.TaskMessage, pool SubWorkerPool) error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.queueRouter == nil {
+		d.queueRouter = queue.NewRouter()
+		if d.cfg.QueueDriver != nil && d.queueConsumer == nil {
+			d.queueConsumer = queue.NewConsumer(d.cfg.QueueDriver, d.queueRouter, d)
+		}
+	}
+
+	d.queueRouter.Register(topic, func(ctx context.Context, msg *queue.Message, pool worker.SubWorkerPool) error {
+		var task protocol.TaskMessage
+		if err := json.Unmarshal(msg.Payload, &task); err != nil {
+			return fmt.Errorf("dispatcher: decode queue task failed: %w", err)
+		}
+		return handler(ctx, &task, pool)
+	})
+}
+
+// Stop gracefully shuts down the dispatcher and stops any active queue consumer.
 func (d *Dispatcher) Stop() {
 	d.mu.Lock()
 	if d.closed {
@@ -188,7 +234,12 @@ func (d *Dispatcher) Stop() {
 	d.closed = true
 	close(d.quit)
 	close(d.taskQueue)
+	consumer := d.queueConsumer
 	d.mu.Unlock()
+
+	if consumer != nil {
+		consumer.Stop()
+	}
 
 	d.wg.Wait()
 }

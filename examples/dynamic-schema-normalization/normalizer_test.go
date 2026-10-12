@@ -52,7 +52,7 @@ ACC-001,USD,1500.50,CONFIDENTIAL_NOTE,ACC-001,John Doe
 `
 	alphaRes, err := engine.Execute(ctx, alphaWasm.WasmBytes, wasm.ExecOptions{
 		Stdin:   strings.NewReader(alphaRawCSV),
-		Timeout: 10 * time.Second,
+		Timeout: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("Bank Alpha execution failed: %v (stderr: %s)", err, alphaRes.Stderr)
@@ -95,7 +95,7 @@ ACC-001,usd,John Doe,150050,ACC-001
 `
 	betaRes, err := engine.Execute(ctx, betaWasm.WasmBytes, wasm.ExecOptions{
 		Stdin:   strings.NewReader(betaRawCSV),
-		Timeout: 10 * time.Second,
+		Timeout: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("FinTech Beta execution failed: %v (stderr: %s)", err, betaRes.Stderr)

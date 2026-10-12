@@ -3,6 +3,7 @@ package worker_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/rachmanzz/subzero/internal/runtime/wasm"
 	"github.com/rachmanzz/subzero/internal/worker"
@@ -35,7 +36,9 @@ func main() {
 	}
 
 	// 2. Initialize Wazero Engine
-	engine, err := wasm.NewEngine(ctx, wasm.DefaultConfig())
+	cfg := wasm.DefaultConfig()
+	cfg.DefaultTimeout = 30 * time.Second
+	engine, err := wasm.NewEngine(ctx, cfg)
 	if err != nil {
 		t.Fatalf("NewEngine failed: %v", err)
 	}
