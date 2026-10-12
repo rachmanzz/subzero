@@ -129,7 +129,39 @@ func (r *relayTask) Execute(ctx context.Context, pool supervisor.SubWorkerPool) 
 		return err
 	}
 
-	// 3. Forward task to worker
+	// Decode task to check if chunk fan-out is needed
+	taskMsg, err := protocol.DecodeTask(rawPayload)
+	if err == nil {
+		if plan, isChunked := supervisor.BuildChunkFanOutPlan(taskMsg); isChunked {
+			runner := supervisor.TaskRunnerFunc(func(subCtx context.Context, subTask *protocol.TaskMessage) (*protocol.ResultMessage, error) {
+				workerConn, err := r.tr.Dial(subCtx, r.workerAddr)
+				if err != nil {
+					return nil, err
+				}
+				defer workerConn.Close()
+
+				subBytes, err := protocol.EncodeTask(subTask, r.secretKey)
+				if err != nil {
+					return nil, err
+				}
+				if err := protocol.WriteFrame(workerConn, subBytes, r.secretKey); err != nil {
+					return nil, err
+				}
+				resBytes, err := protocol.ReadFrame(workerConn, r.secretKey, 0)
+				if err != nil {
+					return nil, err
+				}
+				return protocol.DecodeResult(resBytes)
+			})
+
+			chunkedTask := supervisor.NewChunkedTask(plan, runner)
+			_ = chunkedTask.Execute(ctx, pool)
+			resPayload, _ := protocol.EncodeResult(chunkedTask.Result())
+			return protocol.WriteFrame(r.clientConn, resPayload, r.secretKey)
+		}
+	}
+
+	// 3. Single-task direct forwarding to worker
 	workerConn, err := r.tr.Dial(ctx, r.workerAddr)
 	if err != nil {
 		errRes := &protocol.ResultMessage{
