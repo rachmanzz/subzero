@@ -16,6 +16,7 @@ Welcome to the official technical documentation for **Subzero**, a distributed *
 | [**6. API Management, Dashboard & Wasm (`management-and-wasm.md`)**](management-and-wasm.md) | The Chi-based management control plane, embedded dashboard UI, native Go-to-Wasm (`wasip1`) compiler adapter, and module repository. |
 | [**7. Dynamic Schema Normalization (`dynamic-data-transformation.md`)**](dynamic-data-transformation.md) | Deep-dive on solving the "Canonical Schema vs Disparate Tenant Formats" problem (e.g. mapping `acdeab` or `adbca` to `abcd`) for Banks, FinTechs, and SaaS clients. |
 | [**8. Pluggable Extension Guide (`pluggable-guide.md`)**](pluggable-guide.md) | Step-by-step developer tutorial on creating custom adapters and plugins (custom network transports, storage drivers, and alternative Wasm compilers). |
+| [**9. Module Packaging Specification (`module-packaging-specification.md`)**](module-packaging-specification.md) | Official packaging standard for Wasm modules (`.tar.gz`), `config.zero` manifest, `readme.md`, entrypoint rules, AST backdoor auditing, and strict rejection policies. |
 
 ---
 
