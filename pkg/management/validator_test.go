@@ -28,6 +28,11 @@ func createTestPkgDir(t *testing.T, files map[string]string) string {
 
 func TestVerifyStructure_Valid(t *testing.T) {
 	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": `name: my-parser
+version: 1.0.0
+entrypoint: main.go
+target: wasip1`,
+		"readme.md": "# Parser Documentation\nNormalizes data.",
 		"main.go": `package main
 
 import "fmt"
@@ -39,17 +44,71 @@ func main() {
 	})
 	defer os.RemoveAll(dir)
 
-	mainFile, err := management.VerifyStructure(dir)
+	pkgInfo, err := management.VerifyModulePackage(dir)
 	if err != nil {
 		t.Fatalf("expected valid structure, got: %v", err)
+	}
+	if filepath.Base(pkgInfo.MainFile) != "main.go" {
+		t.Errorf("expected main.go, got %s", pkgInfo.MainFile)
+	}
+	if pkgInfo.Config.Name != "my-parser" {
+		t.Errorf("expected module name my-parser, got %s", pkgInfo.Config.Name)
+	}
+
+	// VerifyStructure alias check
+	mainFile, err := management.VerifyStructure(dir)
+	if err != nil {
+		t.Fatalf("VerifyStructure failed: %v", err)
 	}
 	if filepath.Base(mainFile) != "main.go" {
 		t.Errorf("expected main.go, got %s", mainFile)
 	}
 }
 
+func TestVerifyStructure_MissingConfigZero(t *testing.T) {
+	dir := createTestPkgDir(t, map[string]string{
+		"readme.md": "# Docs",
+		"main.go":   "package main\nfunc main() {}",
+	})
+	defer os.RemoveAll(dir)
+
+	_, err := management.VerifyModulePackage(dir)
+	if err == nil {
+		t.Fatal("expected error for missing config.zero, got nil")
+	}
+}
+
+func TestVerifyStructure_MissingReadme(t *testing.T) {
+	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": "name: test\n",
+		"main.go":     "package main\nfunc main() {}",
+	})
+	defer os.RemoveAll(dir)
+
+	_, err := management.VerifyModulePackage(dir)
+	if err == nil {
+		t.Fatal("expected error for missing readme.md, got nil")
+	}
+}
+
+func TestVerifyStructure_EmptyConfigZero(t *testing.T) {
+	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": "   \n",
+		"readme.md":   "# Docs",
+		"main.go":     "package main\nfunc main() {}",
+	})
+	defer os.RemoveAll(dir)
+
+	_, err := management.VerifyModulePackage(dir)
+	if err == nil {
+		t.Fatal("expected error for empty config.zero, got nil")
+	}
+}
+
 func TestVerifyStructure_MissingPackageMain(t *testing.T) {
 	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": "name: test\n",
+		"readme.md":   "# Docs",
 		"lib.go": `package mylib
 
 func DoWork() {}
@@ -57,7 +116,7 @@ func DoWork() {}
 	})
 	defer os.RemoveAll(dir)
 
-	_, err := management.VerifyStructure(dir)
+	_, err := management.VerifyModulePackage(dir)
 	if err == nil {
 		t.Fatal("expected error for missing package main, got nil")
 	}
@@ -65,6 +124,8 @@ func DoWork() {}
 
 func TestVerifyStructure_MissingFuncMain(t *testing.T) {
 	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": "name: test\n",
+		"readme.md":   "# Docs",
 		"main.go": `package main
 
 var x = 10
@@ -72,7 +133,7 @@ var x = 10
 	})
 	defer os.RemoveAll(dir)
 
-	_, err := management.VerifyStructure(dir)
+	_, err := management.VerifyModulePackage(dir)
 	if err == nil {
 		t.Fatal("expected error for missing func main(), got nil")
 	}
@@ -80,11 +141,12 @@ var x = 10
 
 func TestVerifyStructure_NoGoFiles(t *testing.T) {
 	dir := createTestPkgDir(t, map[string]string{
-		"readme.txt": "just a file",
+		"config.zero": "name: test\n",
+		"readme.md":   "# Docs",
 	})
 	defer os.RemoveAll(dir)
 
-	_, err := management.VerifyStructure(dir)
+	_, err := management.VerifyModulePackage(dir)
 	if err == nil {
 		t.Fatal("expected error for empty go directory, got nil")
 	}

@@ -18,7 +18,7 @@ func TestCLI_ModulePackAndAudit(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create valid Go transformer
+	// Create valid Go transformer with standard structure
 	srcCode := `package main
 import "fmt"
 func main() { fmt.Println("CLI Test Wasm") }`
@@ -26,6 +26,12 @@ func main() { fmt.Println("CLI Test Wasm") }`
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module climod\ngo 1.22"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "config.zero"), []byte("name: climod\nentrypoint: main.go\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "readme.md"), []byte("# CLI Module Docs\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,6 +71,12 @@ func TestCLI_ModuleAuditBackdoorDetection(t *testing.T) {
 import "os/exec"
 func main() { exec.Command("whoami") }`
 	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(malCode), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "config.zero"), []byte("name: backdoor-mod\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "readme.md"), []byte("# Malicious\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -115,6 +127,8 @@ import "fmt"
 func main() { fmt.Println("Published via CLI") }`
 	_ = os.WriteFile(filepath.Join(modDir, "main.go"), []byte(validCode), 0644)
 	_ = os.WriteFile(filepath.Join(modDir, "go.mod"), []byte("module testmod\ngo 1.22"), 0644)
+	_ = os.WriteFile(filepath.Join(modDir, "config.zero"), []byte("name: currency-normalizer\ntenant: acme-corp\nentrypoint: main.go\n"), 0644)
+	_ = os.WriteFile(filepath.Join(modDir, "readme.md"), []byte("# Currency Normalizer\nNormalizes currencies.\n"), 0644)
 
 	// 1. Test Publish from Directory
 	err = handleModulePublish([]string{
@@ -163,3 +177,39 @@ func main() { fmt.Println("Published via CLI") }`
 		t.Fatal("downloaded file is not a valid WebAssembly binary")
 	}
 }
+
+func TestCLI_ModuleInit(t *testing.T) {
+	initDir, err := os.MkdirTemp("", "cli-test-init-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(initDir)
+
+	subDir := filepath.Join(initDir, "new-mod")
+	err = handleModuleInit([]string{
+		"--name", "custom-filter",
+		"--tenant", "tenant-x",
+		subDir,
+	})
+	if err != nil {
+		t.Fatalf("handleModuleInit failed: %v", err)
+	}
+
+	// Verify generated files
+	for _, expectedFile := range []string{"config.zero", "readme.md", "main.go", "go.mod"} {
+		p := filepath.Join(subDir, expectedFile)
+		if fi, err := os.Stat(p); err != nil || fi.Size() == 0 {
+			t.Fatalf("expected non-empty file %s, err: %v", expectedFile, err)
+		}
+	}
+
+	// Verify structure validation passes on initialized module
+	pkgInfo, err := management.VerifyModulePackage(subDir)
+	if err != nil {
+		t.Fatalf("VerifyModulePackage failed on scaffolded module: %v", err)
+	}
+	if pkgInfo.Config.Name != "custom-filter" || pkgInfo.Config.Tenant != "tenant-x" {
+		t.Fatalf("unexpected config values in scaffolded module: %+v", pkgInfo.Config)
+	}
+}
+

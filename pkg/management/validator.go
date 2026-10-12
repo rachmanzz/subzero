@@ -1,6 +1,10 @@
 package management
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -9,6 +13,14 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+)
+
+var (
+	ErrMissingConfigZero     = errors.New("structure: package must contain config.zero specification file")
+	ErrMissingReadme         = errors.New("structure: package must contain readme.md documentation file")
+	ErrEmptyConfigZero       = errors.New("structure: config.zero cannot be empty")
+	ErrInvalidConfigZero     = errors.New("structure: config.zero is invalid or malformed")
+	ErrInvalidMainEntrypoint = errors.New("structure: entrypoint does not contain package main or func main()")
 )
 
 // SecurityViolation describes a detected unsafe pattern or potential backdoor.
@@ -38,47 +50,205 @@ var forbiddenImports = map[string]string{
 	"runtime/cgo":  "CGo native code invocation forbidden",
 }
 
-// VerifyStructure inspects the unpacked directory to ensure it is a valid Go program with main().
-func VerifyStructure(rootPath string) (string, error) {
-	var mainFile string
-	hasMainFunc := false
+// ConfigZero defines the module metadata and runtime specification declared in config.zero.
+type ConfigZero struct {
+	Name             string `json:"name" yaml:"name"`
+	Version          string `json:"version" yaml:"version"`
+	Tenant           string `json:"tenant" yaml:"tenant"`
+	Target           string `json:"target" yaml:"target"`                 // Default: "wasip1"
+	Entrypoint       string `json:"entrypoint" yaml:"entrypoint"`         // Default: "main.go"
+	Description      string `json:"description" yaml:"description"`
+	MemoryLimitPages uint32 `json:"memory_limit_pages" yaml:"memory_limit_pages"`
+	Timeout          string `json:"timeout" yaml:"timeout"`
+}
 
-	fset := token.NewFileSet()
+// ModulePackageInfo contains the verified components of an uploaded module package.
+type ModulePackageInfo struct {
+	RootPath      string      `json:"root_path"`
+	Config        *ConfigZero `json:"config"`
+	MainFile      string      `json:"main_file"`
+	ReadmePath    string      `json:"readme_path"`
+	ReadmeContent string      `json:"readme_content,omitempty"`
+}
 
-	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+// ParseConfigZero parses config.zero from JSON or Key-Value/YAML format.
+func ParseConfigZero(data []byte) (*ConfigZero, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return nil, ErrEmptyConfigZero
+	}
+
+	var cfg ConfigZero
+	// Try JSON first if it starts with '{'
+	if bytes.HasPrefix(trimmed, []byte("{")) {
+		if err := json.Unmarshal(trimmed, &cfg); err != nil {
+			return nil, fmt.Errorf("invalid json syntax: %w", err)
 		}
-		if info.IsDir() || !strings.HasSuffix(info.Name(), ".go") || strings.HasSuffix(info.Name(), "_test.go") {
-			return nil
-		}
+	} else {
+		// Key-Value / YAML-like scanner (key: value or key = value)
+		scanner := bufio.NewScanner(bytes.NewReader(trimmed))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+				continue
+			}
+			idx := strings.IndexAny(line, ":=")
+			if idx == -1 {
+				continue
+			}
+			k := strings.ToLower(strings.TrimSpace(line[:idx]))
+			v := strings.TrimSpace(line[idx+1:])
+			v = strings.Trim(v, `"'`)
 
-		node, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if err != nil {
-			return fmt.Errorf("structure: syntax error in %s: %w", info.Name(), err)
-		}
-
-		if node.Name.Name == "main" {
-			for _, decl := range node.Decls {
-				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "main" {
-					hasMainFunc = true
-					mainFile = path
-					break
-				}
+			switch k {
+			case "name":
+				cfg.Name = v
+			case "version":
+				cfg.Version = v
+			case "tenant", "tenant_id":
+				cfg.Tenant = v
+			case "target", "target_os":
+				cfg.Target = v
+			case "entrypoint", "main", "main_file":
+				cfg.Entrypoint = v
+			case "description":
+				cfg.Description = v
+			case "memory_limit_pages":
+				var pages uint32
+				_, _ = fmt.Sscanf(v, "%d", &pages)
+				cfg.MemoryLimitPages = pages
+			case "timeout":
+				cfg.Timeout = v
 			}
 		}
-		return nil
-	})
+	}
 
+	if cfg.Entrypoint == "" {
+		cfg.Entrypoint = "main.go"
+	}
+	if cfg.Target == "" {
+		cfg.Target = "wasip1"
+	}
+	if cfg.Name == "" {
+		return nil, errors.New("config.zero must specify module name")
+	}
+
+	return &cfg, nil
+}
+
+// VerifyModulePackage inspects the unpacked module directory, enforcing:
+// 1. config.zero specification file exists and is valid
+// 2. readme.md documentation file exists and is non-empty
+// 3. Main entrypoint Go file exists, has 'package main' and 'func main()'
+func VerifyModulePackage(rootPath string) (*ModulePackageInfo, error) {
+	workDir := rootPath
+
+	// Detect if archive was packed with a single root directory wrapping the files
+	entries, err := os.ReadDir(rootPath)
+	if err == nil && len(entries) == 1 && entries[0].IsDir() {
+		candidate := filepath.Join(rootPath, entries[0].Name())
+		if _, err := os.Stat(filepath.Join(candidate, "config.zero")); err == nil {
+			workDir = candidate
+		}
+	}
+
+	// 1. Verify config.zero
+	cfgPath := filepath.Join(workDir, "config.zero")
+	cfgData, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrMissingConfigZero
+		}
+		return nil, fmt.Errorf("structure: read config.zero: %w", err)
+	}
+
+	cfg, err := ParseConfigZero(cfgData)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidConfigZero, err)
+	}
+
+	// 2. Verify readme.md (case-insensitive: readme.md, README.md, Readme.md)
+	var readmePath string
+	for _, name := range []string{"readme.md", "README.md", "Readme.md"} {
+		p := filepath.Join(workDir, name)
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			readmePath = p
+			break
+		}
+	}
+	if readmePath == "" {
+		return nil, ErrMissingReadme
+	}
+
+	readmeData, err := os.ReadFile(readmePath)
+	if err != nil {
+		return nil, fmt.Errorf("structure: read readme: %w", err)
+	}
+	if len(bytes.TrimSpace(readmeData)) == 0 {
+		return nil, fmt.Errorf("%w: file cannot be empty", ErrMissingReadme)
+	}
+
+	// 3. Verify main entrypoint file
+	entrypointRel := cfg.Entrypoint
+	mainPath := filepath.Join(workDir, entrypointRel)
+	if _, err := os.Stat(mainPath); os.IsNotExist(err) {
+		// Fallback check: look if any .go file in workDir contains func main
+		var foundMain string
+		_ = filepath.Walk(workDir, func(p string, fi os.FileInfo, err error) error {
+			if err != nil || fi.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return nil
+			}
+			fset := token.NewFileSet()
+			if node, err := parser.ParseFile(fset, p, nil, parser.PackageClauseOnly); err == nil && node.Name.Name == "main" {
+				foundMain = p
+			}
+			return nil
+		})
+		if foundMain != "" {
+			mainPath = foundMain
+		} else {
+			return nil, fmt.Errorf("structure: entrypoint %q specified in config.zero does not exist", entrypointRel)
+		}
+	}
+
+	// Verify package main and func main() via AST
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, mainPath, nil, parser.ParseComments)
+	if err != nil {
+		return nil, fmt.Errorf("structure: syntax error in main file %s: %w", filepath.Base(mainPath), err)
+	}
+
+	if node.Name.Name != "main" {
+		return nil, fmt.Errorf("%w: %s has package %q (must be 'main')", ErrInvalidMainEntrypoint, filepath.Base(mainPath), node.Name.Name)
+	}
+
+	hasMainFunc := false
+	for _, decl := range node.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "main" {
+			hasMainFunc = true
+			break
+		}
+	}
+	if !hasMainFunc {
+		return nil, fmt.Errorf("%w: %s is missing func main()", ErrInvalidMainEntrypoint, filepath.Base(mainPath))
+	}
+
+	return &ModulePackageInfo{
+		RootPath:      workDir,
+		Config:        cfg,
+		MainFile:      mainPath,
+		ReadmePath:    readmePath,
+		ReadmeContent: string(readmeData),
+	}, nil
+}
+
+// VerifyStructure verifies module package structure and returns the main entrypoint file path.
+func VerifyStructure(rootPath string) (string, error) {
+	pkgInfo, err := VerifyModulePackage(rootPath)
 	if err != nil {
 		return "", err
 	}
-
-	if !hasMainFunc {
-		return "", ErrMissingMainEntrypoint
-	}
-
-	return mainFile, nil
+	return pkgInfo.MainFile, nil
 }
 
 // AuditSecurity performs deep AST static analysis on all Go files in rootPath to detect backdoors.

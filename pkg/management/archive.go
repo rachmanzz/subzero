@@ -79,11 +79,11 @@ func SafeUnpackTarGz(r io.Reader, destDir string, limits ArchiveLimits) error {
 				return err
 			}
 		case tar.TypeReg:
-			// Whitelist allowed file extensions
+			// Whitelist allowed file extensions (.go, go.mod, go.sum, config.zero, .md, .txt, .json)
 			ext := strings.ToLower(filepath.Ext(targetClean))
 			base := filepath.Base(targetClean)
-			if ext != ".go" && base != "go.mod" && base != "go.sum" && ext != ".md" && ext != ".txt" && ext != ".json" {
-				return fmt.Errorf("%w: %s (only source code files permitted)", ErrInvalidFileType, base)
+			if ext != ".go" && base != "go.mod" && base != "go.sum" && ext != ".md" && ext != ".txt" && ext != ".json" && base != "config.zero" && ext != ".zero" {
+				return fmt.Errorf("%w: %s (only source code and configuration files permitted)", ErrInvalidFileType, base)
 			}
 
 			if err := os.MkdirAll(filepath.Dir(targetClean), 0755); err != nil {
@@ -139,7 +139,7 @@ func PackTarGz(sourceDir string) ([]byte, error) {
 
 		ext := strings.ToLower(filepath.Ext(path))
 		base := filepath.Base(path)
-		if ext != ".go" && base != "go.mod" && base != "go.sum" && ext != ".md" && ext != ".txt" && ext != ".json" {
+		if ext != ".go" && base != "go.mod" && base != "go.sum" && ext != ".md" && ext != ".txt" && ext != ".json" && base != "config.zero" && ext != ".zero" {
 			return nil
 		}
 

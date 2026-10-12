@@ -3,7 +3,6 @@ package management
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -126,14 +125,14 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 
 	filename := strings.ToLower(header.Filename)
 	isTarGz := strings.HasSuffix(filename, ".tar.gz") || strings.HasSuffix(filename, ".tgz")
-	isGo := strings.HasSuffix(filename, ".go")
 
-	if !isTarGz && !isGo {
+	if !isTarGz {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"success": false,
-			"error":   "uploaded file must be a .tar.gz archive or a .go source file",
+			"stage":   "structure_verification",
+			"error":   "uploaded file must be a .tar.gz bundle containing config.zero, readme.md, and your Go main entrypoint",
 		})
 		return
 	}
@@ -146,33 +145,19 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(unpackDir)
 
-	var sourceBytes []byte
-	if isTarGz {
-		if err := SafeUnpackTarGz(file, unpackDir, DefaultArchiveLimits()); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"success": false,
-				"stage":   "archive_unpack",
-				"error":   "failed to unpack archive safely: " + err.Error(),
-			})
-			return
-		}
-	} else {
-		// Single .go file
-		sourceBytes, err = io.ReadAll(file)
-		if err != nil {
-			http.Error(w, "failed to read file: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := os.WriteFile(filepath.Join(unpackDir, "main.go"), sourceBytes, 0644); err != nil {
-			http.Error(w, "failed to write main.go: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+	if err := SafeUnpackTarGz(file, unpackDir, DefaultArchiveLimits()); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"stage":   "archive_unpack",
+			"error":   "failed to unpack archive safely: " + err.Error(),
+		})
+		return
 	}
 
-	// 1. Structure Verification: Ensure package main with main() exists
-	mainFile, err := VerifyStructure(unpackDir)
+	// 1. Structure Verification: Ensure config.zero, readme.md, and main entrypoint exist
+	pkgInfo, err := VerifyModulePackage(unpackDir)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -184,13 +169,11 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If sourceBytes wasn't captured from single file, capture main.go for store
-	if len(sourceBytes) == 0 && mainFile != "" {
-		sourceBytes, _ = os.ReadFile(mainFile)
-	}
+	mainFile := pkgInfo.MainFile
+	sourceBytes, _ := os.ReadFile(mainFile)
 
 	// 2. Security & Backdoor Static Analysis (AST scan)
-	auditReport, err := AuditSecurity(unpackDir)
+	auditReport, err := AuditSecurity(pkgInfo.RootPath)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -216,20 +199,28 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Compilation Phase
 	tenantID := r.FormValue("tenant_id")
+	if tenantID == "" && pkgInfo.Config.Tenant != "" {
+		tenantID = pkgInfo.Config.Tenant
+	}
 	if tenantID == "" {
 		tenantID = "default"
 	}
 
 	moduleName := r.FormValue("module_name")
+	if moduleName == "" && pkgInfo.Config.Name != "" {
+		moduleName = pkgInfo.Config.Name
+	}
 	if moduleName == "" {
 		cleanBase := filepath.Base(header.Filename)
 		cleanBase = strings.TrimSuffix(cleanBase, ".tar.gz")
 		cleanBase = strings.TrimSuffix(cleanBase, ".tgz")
-		cleanBase = strings.TrimSuffix(cleanBase, ".go")
 		moduleName = cleanBase
 	}
 
 	targetOS := r.FormValue("target_os")
+	if targetOS == "" && pkgInfo.Config.Target != "" {
+		targetOS = pkgInfo.Config.Target
+	}
 	if targetOS == "" {
 		targetOS = "wasip1"
 	}
@@ -243,7 +234,7 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 
 	var compileRes *CompileResult
 	if goComp, ok := s.cfg.Compiler.(*GoCompiler); ok {
-		compileRes, err = goComp.CompileDir(r.Context(), unpackDir, opts)
+		compileRes, err = goComp.CompileDir(r.Context(), pkgInfo.RootPath, opts)
 	} else {
 		compileRes, err = s.cfg.Compiler.Compile(r.Context(), sourceBytes, opts)
 	}
@@ -269,6 +260,8 @@ func (s *Server) handleCompileModule(w http.ResponseWriter, r *http.Request) {
 		Target:      targetOS,
 		Status:      "PUBLISHED",
 		Audit:       auditReport,
+		Config:      pkgInfo.Config,
+		Readme:      pkgInfo.ReadmeContent,
 		CreatedAt:   time.Now(),
 		CompileTime: compileRes.Duration.String(),
 	}

@@ -54,17 +54,30 @@ func main() {
 	fmt.Println("Subzero Wasm Executed")
 }
 `
+	tarGzBytes, err := createTestTarGz(map[string]string{
+		"config.zero": `name: test-parser
+version: 1.0.0
+tenant: test-tenant
+target: wasip1
+entrypoint: main.go`,
+		"readme.md": "# Test Parser\nConverts test data to wasm.",
+		"main.go":   goSource,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	_ = writer.WriteField("tenant_id", "test-tenant")
 	_ = writer.WriteField("module_name", "test-parser")
 	_ = writer.WriteField("target_os", "wasip1")
 
-	part, err := writer.CreateFormFile("file", "main.go")
+	part, err := writer.CreateFormFile("file", "package.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = part.Write([]byte(goSource))
+	_, _ = part.Write(tarGzBytes)
 	_ = writer.Close()
 
 	w = httptest.NewRecorder()
@@ -155,6 +168,12 @@ func TestManagementServer_TarGzWorkflow(t *testing.T) {
 	r := srv.Routes()
 
 	tarGzBytes, err := createTestTarGz(map[string]string{
+		"config.zero": `name: normalizer-bundle
+version: 1.0.0
+tenant: fintech-corp
+entrypoint: main.go
+target: wasip1`,
+		"readme.md": "# Normalizer Bundle\nNormalizes fintech data",
 		"main.go": `package main
 import "fmt"
 func main() { fmt.Println("hello from tar.gz") }`,
@@ -219,6 +238,11 @@ func TestManagementServer_SecurityAuditReject(t *testing.T) {
 
 	// Malicious archive with os/exec
 	tarGzBytes, err := createTestTarGz(map[string]string{
+		"config.zero": `name: backdoor-bundle
+version: 1.0.0
+tenant: malicious-user
+entrypoint: main.go`,
+		"readme.md": "# Malicious Bundle\nTest backdoor detection.",
 		"main.go": `package main
 import "os/exec"
 func main() { exec.Command("cat", "/etc/passwd") }`,
@@ -259,4 +283,85 @@ func main() { exec.Command("cat", "/etc/passwd") }`,
 		t.Fatalf("expected success to be false")
 	}
 }
+
+func TestManagementServer_StructureReject(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "subzero-struct-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := management.NewFileStore(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := management.NewServer(management.ServerConfig{
+		Compiler: management.NewGoCompiler(""),
+		Store:    store,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	r := srv.Routes()
+
+	// 1. Archive missing config.zero
+	badTarBytes, err := createTestTarGz(map[string]string{
+		"readme.md": "# Docs",
+		"main.go":   "package main\nfunc main() {}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("tenant_id", "test-tenant")
+	_ = writer.WriteField("module_name", "missing-config")
+
+	part, err := writer.CreateFormFile("file", "package.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write(badTarBytes)
+	_ = writer.Close()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/modules/compile", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 Unprocessable Entity for missing config.zero, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["stage"] != "structure_verification" {
+		t.Fatalf("expected stage structure_verification, got %v", resp["stage"])
+	}
+
+	// 2. Reject direct raw .go file
+	var body2 bytes.Buffer
+	writer2 := multipart.NewWriter(&body2)
+	part2, err := writer2.CreateFormFile("file", "main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part2.Write([]byte("package main\nfunc main() {}"))
+	_ = writer2.Close()
+
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/api/modules/compile", &body2)
+	req2.Header.Set("Content-Type", writer2.FormDataContentType())
+	r.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for direct .go upload, got %d", w2.Code)
+	}
+}
+
 

@@ -65,6 +65,7 @@ Usage:
 
 Available Commands:
   module       Manage, audit, package, and publish tenant Wasm modules
+    init       Scaffold a new standardized module directory (config.zero, readme.md, main.go)
     pack       Package a Go source directory into a safe .tar.gz bundle
     audit      Audit a Go directory or .tar.gz archive for security & backdoor vectors
     publish    Audit, bundle, and push a module to the Subzero Management API
@@ -82,12 +83,14 @@ Run 'subzero-cli <command> <subcommand> -h' for more details on a command.`)
 
 func handleModuleCommand(args []string) error {
 	if len(args) == 0 {
-		fmt.Println(`Usage: subzero-cli module <pack | audit | publish | list | download> [options]`)
+		fmt.Println(`Usage: subzero-cli module <init | pack | audit | publish | list | download> [options]`)
 		return nil
 	}
 
 	sub := args[0]
 	switch sub {
+	case "init":
+		return handleModuleInit(args[1:])
 	case "pack":
 		return handleModulePack(args[1:])
 	case "audit":
@@ -101,6 +104,93 @@ func handleModuleCommand(args []string) error {
 	default:
 		return fmt.Errorf("unknown module subcommand %q. Run 'subzero-cli module' for help", sub)
 	}
+}
+
+func handleModuleInit(args []string) error {
+	fs := flag.NewFlagSet("module init", flag.ExitOnError)
+	name := fs.String("name", "my-transformer", "Module identifier name")
+	tenant := fs.String("tenant", "default", "Tenant identifier")
+	target := fs.String("target", "wasip1", "Target Wasm compilation architecture")
+	fs.Usage = func() {
+		fmt.Println("Usage: subzero-cli module init <directory> [flags]")
+		fs.PrintDefaults()
+	}
+	positionals, err := parseFlexible(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positionals) < 1 {
+		fs.Usage()
+		return fmt.Errorf("target directory is required")
+	}
+
+	targetDir := positionals[0]
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// 1. config.zero
+	cfgZero := fmt.Sprintf(`# Subzero Module Specification
+name: %s
+version: 1.0.0
+tenant: %s
+target: %s
+entrypoint: main.go
+description: Data transformation module for Subzero runtime
+memory_limit_pages: 512
+timeout: 10s
+`, *name, *tenant, *target)
+	if err := os.WriteFile(filepath.Join(targetDir, "config.zero"), []byte(cfgZero), 0644); err != nil {
+		return err
+	}
+
+	// 2. readme.md
+	readme := fmt.Sprintf(`# %s Module
+
+Documentation for %s Subzero WebAssembly module.
+
+## Purpose
+Transforms incoming tenant documents into standardized canonical format.
+
+## Input & Output
+- **Input**: CSV / Excel / Raw streams via Stdin or SourceURI.
+- **Output**: Cleaned and validated data records via Stdout.
+`, *name, *name)
+	if err := os.WriteFile(filepath.Join(targetDir, "readme.md"), []byte(readme), 0644); err != nil {
+		return err
+	}
+
+	// 3. main.go
+	mainGo := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	// Subzero Wasm Entrypoint
+	taskID := os.Getenv("SUBZERO_TASK_ID")
+	tenantID := os.Getenv("SUBZERO_TENANT_ID")
+	fmt.Fprintf(os.Stderr, "Processing task %s for tenant %s\n", taskID, tenantID)
+}
+`
+	if err := os.WriteFile(filepath.Join(targetDir, "main.go"), []byte(mainGo), 0644); err != nil {
+		return err
+	}
+
+	// 4. go.mod
+	goMod := fmt.Sprintf("module %s\n\ngo 1.22\n", *name)
+	if err := os.WriteFile(filepath.Join(targetDir, "go.mod"), []byte(goMod), 0644); err != nil {
+		return err
+	}
+
+	fmt.Printf("✅ Initialized Subzero module scaffold at: %s\n", targetDir)
+	fmt.Println("   ├── config.zero  (Module runtime specification)")
+	fmt.Println("   ├── readme.md    (Documentation & schema)")
+	fmt.Println("   ├── main.go      (Go entrypoint: package main, func main)")
+	fmt.Println("   └── go.mod       (Go module definition)")
+	return nil
 }
 
 func handleModulePack(args []string) error {
@@ -130,11 +220,14 @@ func handleModulePack(args []string) error {
 	fmt.Printf("📦 Packaging module from: %s\n", absDir)
 
 	if !*skipAudit {
-		fmt.Println("🔍 Running pre-packaging AST structure and security audit...")
-		if _, err := management.VerifyStructure(absDir); err != nil {
+		fmt.Println("🔍 Running pre-packaging structure and security audit...")
+		pkgInfo, err := management.VerifyModulePackage(absDir)
+		if err != nil {
 			return fmt.Errorf("structure check failed: %w", err)
 		}
-		fmt.Println("  ✓ Package main and func main() verified")
+		fmt.Printf("  ✓ config.zero verified (name: %s, target: %s)\n", pkgInfo.Config.Name, pkgInfo.Config.Target)
+		fmt.Println("  ✓ readme.md documentation verified")
+		fmt.Printf("  ✓ Entrypoint %s verified (package main, func main())\n", filepath.Base(pkgInfo.MainFile))
 
 		report, err := management.AuditSecurity(absDir)
 		if err != nil {
@@ -207,14 +300,14 @@ func handleModuleAudit(args []string) error {
 		auditDir = tmpDir
 	}
 
-	fmt.Printf("🔍 Auditing Go AST in: %s\n", auditDir)
+	fmt.Printf("🔍 Auditing module package in: %s\n", auditDir)
 
-	mainFile, err := management.VerifyStructure(auditDir)
+	pkgInfo, err := management.VerifyModulePackage(auditDir)
 	if err != nil {
 		fmt.Printf("❌ Structure Verification Failed: %v\n", err)
-	} else {
-		fmt.Printf("✓ Structure Verified: valid entrypoint in %s\n", filepath.Base(mainFile))
+		return err
 	}
+	fmt.Printf("✓ Structure Verified: module %q (entrypoint: %s)\n", pkgInfo.Config.Name, filepath.Base(pkgInfo.MainFile))
 
 	report, err := management.AuditSecurity(auditDir)
 	if err != nil {
@@ -262,9 +355,13 @@ func handleModulePublish(args []string) error {
 	if fi.IsDir() {
 		if !*skipLocalAudit {
 			fmt.Println("🔍 Performing pre-flight local audit...")
-			if _, err := management.VerifyStructure(target); err != nil {
+			pkgInfo, err := management.VerifyModulePackage(target)
+			if err != nil {
 				return fmt.Errorf("local structure check failed: %w", err)
 			}
+			fmt.Printf("  ✓ config.zero verified (name: %s, target: %s)\n", pkgInfo.Config.Name, pkgInfo.Config.Target)
+			fmt.Println("  ✓ readme.md documentation verified")
+			fmt.Printf("  ✓ Entrypoint %s verified (package main, func main())\n", filepath.Base(pkgInfo.MainFile))
 			report, err := management.AuditSecurity(target)
 			if err != nil {
 				return err

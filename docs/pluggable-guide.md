@@ -186,3 +186,56 @@ func (s *PostgresStore) Delete(ctx context.Context, moduleID string) error {
 }
 ```
 All components seamlessly integrate without altering any core daemon logic.
+
+---
+
+## 5. Standard Module Package Structure (`.tar.gz`)
+
+Every tenant transformation module uploaded to Subzero must be packaged as a `.tar.gz` archive following this standardized directory structure:
+
+```text
+my-module/
+├── config.zero       # [REQUIRED] Module runtime specification & metadata
+├── readme.md         # [REQUIRED] Human-readable documentation & data schema
+├── main.go           # [REQUIRED] Entrypoint Go program (package main, func main)
+├── go.mod            # [RECOMMENDED] Go module declaration
+└── ...               # Additional helper Go source files
+```
+
+### 1. `config.zero` Specification
+Declared in YAML/Key-Value or JSON:
+```yaml
+name: currency-normalizer
+version: 1.0.0
+tenant: acme-bank
+target: wasip1
+entrypoint: main.go
+description: Normalizes raw currency and balance columns into canonical schema
+memory_limit_pages: 512
+timeout: 10s
+```
+
+### 2. Validation & Strict Rejection Rules
+The Subzero Management Server and `subzero-cli` strictly enforce:
+* **Missing `config.zero`**: Archive is **rejected** (`HTTP 422`).
+* **Missing `readme.md`**: Archive is **rejected** (`HTTP 422`).
+* **Missing / Invalid Entrypoint**: Must contain `package main` and `func main()`. Otherwise **rejected**.
+* **Forbidden Imports / Backdoors**: Scanned via AST. Imports of `os/exec`, `syscall`, `unsafe`, or network listeners cause immediate **rejection**.
+* **Direct `.go` uploads**: Rejected. All modules must be bundled into compliant `.tar.gz` archives.
+
+### 3. Developer Tooling: `subzero-cli`
+Developers can quickly scaffold, verify, and bundle modules using:
+```bash
+# Scaffold new module skeleton
+subzero-cli module init --name my-mod --tenant my-tenant ./my-mod
+
+# Audit structure and security locally
+subzero-cli module audit ./my-mod
+
+# Package into compliant bundle
+subzero-cli module pack -o my-mod.tar.gz ./my-mod
+
+# Publish to Subzero server
+subzero-cli module publish --server http://localhost:8080 --tenant my-tenant --name my-mod ./my-mod
+```
+

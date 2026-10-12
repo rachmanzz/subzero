@@ -15,6 +15,8 @@ type WasmModule struct {
 	SourcePath  string       `json:"source_path,omitempty"`
 	Status      string       `json:"status"` // e.g. "PUBLISHED", "REJECTED"
 	Audit       *AuditReport `json:"audit,omitempty"`
+	Config      *ConfigZero  `json:"config,omitempty"`
+	Readme      string       `json:"readme,omitempty"`
 	CreatedAt   time.Time    `json:"created_at"`
 	CompileTime string       `json:"compile_time"`
 }
