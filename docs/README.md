@@ -14,7 +14,8 @@ Welcome to the official technical documentation for **Subzero**, a distributed *
 | [**4. Storage Drivers & Direct Ingestion (`storage.md`)**](storage.md) | The "Zero Payload in Control Plane" architecture, pre-signed URL generation, streaming readers, and storage provider implementations. |
 | [**5. Supervisor, Dispatcher & Worker Lifecycle (`supervisor-and-worker.md`)**](supervisor-and-worker.md) | Internal task dispatcher (`v3/worker` pattern), throttling semaphores, panic recovery, idle watchdog timers, and the scale-to-zero state machine. |
 | [**6. API Management, Dashboard & Wasm (`management-and-wasm.md`)**](management-and-wasm.md) | The Chi-based management control plane, embedded dashboard UI, native Go-to-Wasm (`wasip1`) compiler adapter, and module repository. |
-| [**7. Pluggable Extension Guide (`pluggable-guide.md`)**](pluggable-guide.md) | Step-by-step developer tutorial on creating custom adapters and plugins (custom network transports, storage drivers, and alternative Wasm compilers). |
+| [**7. Dynamic Schema Normalization (`dynamic-data-transformation.md`)**](dynamic-data-transformation.md) | Deep-dive on solving the "Canonical Schema vs Disparate Tenant Formats" problem (e.g. mapping `acdeab` or `adbca` to `abcd`) for Banks, FinTechs, and SaaS clients. |
+| [**8. Pluggable Extension Guide (`pluggable-guide.md`)**](pluggable-guide.md) | Step-by-step developer tutorial on creating custom adapters and plugins (custom network transports, storage drivers, and alternative Wasm compilers). |
 
 ---
 
