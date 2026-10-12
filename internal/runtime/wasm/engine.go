@@ -36,17 +36,17 @@ var (
 type Config struct {
 	MemoryLimitPages         uint32        // Memory limit in 64KB Wasm pages (e.g. 512 pages = 32MB)
 	DefaultTimeout           time.Duration // Default timeout per execution (e.g. 10s)
-	DefaultFuel              uint64        // Default operation quota (0 = disabled/unlimited)
-	EnableCloseOnContextDone bool          // Preempt execution on context cancel/timeout (default: true)
+	DefaultFuel               uint64        // Default operation quota (0 = disabled/unlimited)
+	DisableCloseOnContextDone bool          // If true, disables context cancellation preemption (default: false, meaning preemption is enabled)
 }
 
 // DefaultConfig returns safe multi-tenant sandbox defaults.
 func DefaultConfig() Config {
 	return Config{
-		MemoryLimitPages:         512, // 32 MB
-		DefaultTimeout:           10 * time.Second,
-		DefaultFuel:              0, // Unlimited by default, can be set per-task
-		EnableCloseOnContextDone: true,
+		MemoryLimitPages:          512, // 32 MB
+		DefaultTimeout:            10 * time.Second,
+		DefaultFuel:               0, // Unlimited by default, can be set per-task
+		DisableCloseOnContextDone: false,
 	}
 }
 
@@ -67,7 +67,7 @@ func NewEngine(ctx context.Context, cfg Config) (*Engine, error) {
 	}
 
 	rtCfg := wazero.NewRuntimeConfig().
-		WithCloseOnContextDone(cfg.EnableCloseOnContextDone).
+		WithCloseOnContextDone(!cfg.DisableCloseOnContextDone).
 		WithMemoryLimitPages(cfg.MemoryLimitPages)
 
 	rt := wazero.NewRuntimeWithConfig(ctx, rtCfg)

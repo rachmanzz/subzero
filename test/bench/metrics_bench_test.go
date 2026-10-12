@@ -97,9 +97,13 @@ func TestTargetMetric_LocalProcessColdStart(t *testing.T) {
 	}
 	latency := time.Since(start)
 
-	t.Logf("[Target Metric PRD 2] Local Process Cold-Start Latency: %v (Target: < 100ms)", latency)
-	if latency >= 100*time.Millisecond {
-		t.Errorf("Cold-start latency (%v) exceeded PRD target threshold of 100ms", latency)
+	maxAllowed := 100 * time.Millisecond
+	if RaceDetectorEnabled {
+		maxAllowed = 300 * time.Millisecond
+	}
+	t.Logf("[Target Metric PRD 2] Local Process Cold-Start Latency: %v (Target: < %v)", latency, maxAllowed)
+	if latency >= maxAllowed {
+		t.Errorf("Cold-start latency (%v) exceeded target threshold of %v", latency, maxAllowed)
 	}
 }
 

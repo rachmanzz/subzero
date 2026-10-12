@@ -303,13 +303,13 @@ func validateRequestedPermissions(req *permission.ModuleRequest) error {
 		if trimmed == "" {
 			continue
 		}
+		if strings.Contains(trimmed, "..") {
+			return fmt.Errorf("path traversal forbidden: %q", p)
+		}
 		if !filepath.IsAbs(trimmed) {
 			return fmt.Errorf("requested path must be absolute: %q", p)
 		}
 		clean := filepath.Clean(trimmed)
-		if strings.Contains(clean, "..") {
-			return fmt.Errorf("path traversal forbidden: %q", p)
-		}
 		for _, sens := range []string{"/etc", "/root", "/boot", "/sys", "/proc", "/dev"} {
 			if clean == sens || strings.HasPrefix(clean, sens+"/") {
 				return fmt.Errorf("access to sensitive system directory forbidden: %q", clean)

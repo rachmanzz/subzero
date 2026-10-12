@@ -28,7 +28,7 @@ subzero/
 ├── cmd/
 │   ├── subzero-supervisor/   # Daemon coordinating worker lifecycles & task queueing
 │   ├── subzero-worker/       # Standalone scale-to-zero worker executable
-│   └── subzero-cli/          # CLI utility for diagnostics and benchmark execution
+│   └── subzero-cli/          # Multi-command CLI utility (module lifecycle, upload requests, diagnostics, and tasks)
 ├── pkg/
 │   ├── producer/             # Client SDK for API Gateways (submit tasks & upload slots)
 │   ├── protocol/             # Wire framing (HMAC-SHA256, 4-byte length prefix) & messages

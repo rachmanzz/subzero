@@ -108,12 +108,6 @@ func main() {
 				IsSuccess:     true,
 				ProcessedRows: 0,
 			}, nil
-		case "native-parser":
-			return &protocol.ResultMessage{
-				TaskID:        task.TaskID,
-				IsSuccess:     true,
-				ProcessedRows: 100,
-			}, nil
 		default:
 			return &protocol.ResultMessage{
 				TaskID:       task.TaskID,

@@ -37,9 +37,9 @@ func ValidateEphemeralTTL(ttl time.Duration) (time.Duration, error) {
 	return ttl, nil
 }
 
-// Driver defines the common contract for object storage providers (AWS S3, MinIO, GCS, Local).
+// Driver defines the common contract for object storage providers (AWS S3, MinIO, Local).
 type Driver interface {
-	// Scheme returns the storage scheme identifier (e.g. "s3", "minio", "gcs", "file")
+	// Scheme returns the storage scheme identifier (e.g. "s3", "minio", "file")
 	Scheme() string
 
 	// GenerateUploadSlot creates a pre-signed upload URL for direct browser/client upload.

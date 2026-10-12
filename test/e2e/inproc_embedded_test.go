@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,10 +41,15 @@ func TestInprocEmbeddedRuntime(t *testing.T) {
 		SecretKey:   secretKey,
 		IdleTimeout: 1 * time.Minute,
 	}, func(ctx context.Context, task *protocol.TaskMessage) (*protocol.ResultMessage, error) {
+		lines := strings.Split(strings.TrimSpace(task.CustomConfig["raw_lines"]), "\n")
+		rowCount := 0
+		if len(lines) > 1 {
+			rowCount = len(lines) - 1 // subtract header
+		}
 		return &protocol.ResultMessage{
 			TaskID:        task.TaskID,
 			IsSuccess:     true,
-			ProcessedRows: 888,
+			ProcessedRows: int64(rowCount),
 		}, nil
 	})
 	defer w.Close()
@@ -115,6 +121,9 @@ func TestInprocEmbeddedRuntime(t *testing.T) {
 		TenantID:     "tenant-inproc",
 		ActionTarget: "embedded-transformer",
 		SourceURI:    "inproc://data-stream",
+		CustomConfig: map[string]string{
+			"raw_lines": "header1,header2\nrow1_col1,row1_col2\nrow2_col1,row2_col2\nrow3_col1,row3_col2\n",
+		},
 	}
 
 	start := time.Now()
@@ -126,7 +135,7 @@ func TestInprocEmbeddedRuntime(t *testing.T) {
 
 	t.Logf("[Embedded Inproc Runtime PRD 5.2] Task processed in %v (ProcessedRows: %d)", latency, res.ProcessedRows)
 
-	if !res.IsSuccess || res.ProcessedRows != 888 {
-		t.Errorf("unexpected result: %+v", res)
+	if !res.IsSuccess || res.ProcessedRows != 3 {
+		t.Errorf("unexpected result: %+v, expected ProcessedRows: 3", res)
 	}
 }

@@ -89,12 +89,12 @@ func (c *Client) SubmitTask(ctx context.Context, task *protocol.TaskMessage) (*p
 	}
 	defer conn.Close()
 
-	taskBytes, err := protocol.EncodeTask(task, c.cfg.SecretKey)
+	framedBytes, err := protocol.EncodeFramedTask(task, c.cfg.SecretKey)
 	if err != nil {
-		return nil, fmt.Errorf("producer: encode task failed: %w", err)
+		return nil, fmt.Errorf("producer: encode framed task failed: %w", err)
 	}
 
-	if err := protocol.WriteFrame(conn, taskBytes, c.cfg.SecretKey); err != nil {
+	if _, err := conn.Write(framedBytes); err != nil {
 		return nil, fmt.Errorf("producer: write frame failed: %w", err)
 	}
 

@@ -109,7 +109,7 @@ The transport layer abstracts network connectivity into a pluggable adapter mode
 ## 5. Supervisor Engine (`internal/supervisor/`)
 
 ### [`internal/supervisor/dispatcher.go`](../internal/supervisor/dispatcher.go)
-* **Purpose**: Concurrency controller and task dispatcher based on the zero-dependency `v3/worker` architectural pattern.
+* **Purpose**: Concurrency controller and task dispatcher based on the minimal-dependency `v3/worker` architectural pattern.
 * **Key Features**:
   * `Throttling Semaphore`: Restricts maximum concurrent tasks to prevent memory exhaustion.
   * `SubWorkerPool`: Allows dividing massive tasks (e.g. multi-sheet workbooks) into parallel sub-workers (`pool.Go(...)`).
@@ -175,7 +175,7 @@ The transport layer abstracts network connectivity into a pluggable adapter mode
 * Standalone scale-to-zero worker process that automatically terminates upon idle timeout.
 
 ### [`cmd/subzero-cli/main.go`](../cmd/subzero-cli/main.go)
-* Diagnostic command-line tool for submitting benchmark tasks and measuring round-trip latency.
+* Multi-command command-line tool for module management (init, pack, audit, publish, inspect-policy), task submissions, and benchmark execution.
 
 ### [`cmd/subzero-admin/main.go`](../cmd/subzero-admin/main.go)
 * Standalone HTTP server serving the Management Dashboard and Wasm compilation API.

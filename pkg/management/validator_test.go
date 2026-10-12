@@ -1,8 +1,10 @@
 package management_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rachmanzz/subzero/pkg/management"
@@ -363,20 +365,19 @@ func main() {}
 }
 
 func TestVerifyStructure_PermissionsPathTraversalReject(t *testing.T) {
-	dir := createTestPkgDir(t, map[string]string{
-		"config.zero": `name: bad-perm-module
-permissions.filesystem.read_only: /tmp/../../etc/passwd
-`,
-		"readme.md": "# Docs",
-		"main.go": `package main
+	for _, badPath := range []string{"/tmp/../../etc/passwd", "/tmp/nested/../../data"} {
+		dir := createTestPkgDir(t, map[string]string{
+			"config.zero": fmt.Sprintf("name: bad-perm-module\npermissions.filesystem.read_only: %s\n", badPath),
+			"readme.md":   "# Docs",
+			"main.go": `package main
 func main() {}
 `,
-	})
-	defer os.RemoveAll(dir)
-
-	_, err := management.VerifyModulePackage(dir)
-	if err == nil {
-		t.Fatal("expected error for path traversal, got nil")
+		})
+		_, err := management.VerifyModulePackage(dir)
+		_ = os.RemoveAll(dir)
+		if err == nil || !strings.Contains(err.Error(), "path traversal forbidden") {
+			t.Fatalf("expected 'path traversal forbidden' error for path %q, got: %v", badPath, err)
+		}
 	}
 }
 

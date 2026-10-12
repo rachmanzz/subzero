@@ -167,7 +167,7 @@ func TestHTTPIngressReverseProxyPipeline(t *testing.T) {
 	task := &protocol.TaskMessage{
 		TaskID:       "task-ingress-http-01",
 		TenantID:     "tenant-ingress",
-		ActionTarget: "native-parser",
+		ActionTarget: "health",
 		SourceURI:    "s3://bucket/data.csv",
 	}
 

@@ -370,7 +370,14 @@ func TestContainerSpawner_RealDocker_IfAvailable(t *testing.T) {
 		t.Skip("docker daemon not running or accessible, skipping live docker test")
 	}
 
-	// If docker is available, run a containerized worker test using default OSCommandRunner
+	// Also verify that the target image exists, avoiding CI failures when docker daemon is up but image is unbuilt
+	imgCtx, imgCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer imgCancel()
+	if err := exec.CommandContext(imgCtx, "docker", "image", "inspect", "subzero-worker:latest").Run(); err != nil {
+		t.Skip("docker image subzero-worker:latest not built or present on host, skipping live docker test")
+	}
+
+	// If docker is available and image is present, run a containerized worker test using default OSCommandRunner
 	secretKey := []byte("docker-live-test-secret-key-32b!")
 	spawner, err := supervisor.NewContainerSpawner(supervisor.ContainerSpawnerConfig{
 		Engine:        "docker",

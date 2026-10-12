@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 )
@@ -90,8 +91,8 @@ func TestFramingPayloadExceedsMaxLimit(t *testing.T) {
 
 	// Read with limit lower than payload
 	_, err := ReadFrame(&buf, secretKey, 512)
-	if err == nil {
-		t.Fatal("expected error for payload exceeding max limit, got nil")
+	if !errors.Is(err, ErrPayloadTooLarge) {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
 	}
 }
 
@@ -131,3 +132,33 @@ func TestTaskCodecRoundTrip(t *testing.T) {
 		t.Fatalf("decoded task does not match original: %+v vs %+v", decoded, task)
 	}
 }
+
+func TestEncodeFramedTaskRoundTrip(t *testing.T) {
+	secretKey := []byte("framed-task-secret-key-32b-ok!!!")
+	task := &TaskMessage{
+		TaskID:       "task-framed-001",
+		TenantID:     "tenant-beta",
+		ActionTarget: "csv-normalizer",
+		SourceURI:    "s3://vault/file.csv",
+	}
+
+	framedBytes, err := EncodeFramedTask(task, secretKey)
+	if err != nil {
+		t.Fatalf("EncodeFramedTask failed: %v", err)
+	}
+
+	payload, err := ReadFrame(bytes.NewReader(framedBytes), secretKey, 0)
+	if err != nil {
+		t.Fatalf("ReadFrame failed on EncodeFramedTask bytes: %v", err)
+	}
+
+	decoded, err := DecodeTask(payload)
+	if err != nil {
+		t.Fatalf("DecodeTask failed: %v", err)
+	}
+
+	if decoded.TaskID != task.TaskID || decoded.TenantID != task.TenantID {
+		t.Fatalf("decoded task mismatch: got %+v, want %+v", decoded, task)
+	}
+}
+

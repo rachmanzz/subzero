@@ -152,13 +152,15 @@ Modules can import third-party Go libraries under the following conditions:
 
 ---
 
-## 6. Processing Interface Contract (Subzero Go SDK)
+## 6. Processing Interface Contracts
 
-To streamline module development and guarantee predictable execution, Subzero provides the official **`pkg/sdk`** library (`github.com/rachmanzz/subzero/pkg/sdk`).
+Subzero supports two guest module models:
+1. **Standard I/O Streaming (Default Scaffold)**: Self-contained pure Go standard library modules reading raw bytes from `os.Stdin` and emitting structured JSON `Response` (`is_success`, `processed_rows`, `data`) to `os.Stdout`. This requires zero external dependencies and compiles instantly out of the box with any host Go compiler.
+2. **Subzero Go SDK (`pkg/sdk`)**: For advanced modules requiring structured hostcalls and two-phase lifecycle management (`github.com/rachmanzz/subzero/pkg/sdk`).
 
 ### A. Two-Phase Contract: `Receive` and `Return`
 
-Every transformation module implements the `sdk.Transformer` interface:
+When using `pkg/sdk`, transformation modules implement the `sdk.Transformer` interface:
 
 ```go
 type Transformer interface {
@@ -319,7 +321,7 @@ subzero-cli module init --name currency-normalizer --tenant acme-bank ./currency
 This generates the complete standard structure:
 * `config.zero` populated with manifest defaults.
 * `readme.md` populated with documentation template.
-* `main.go` implementing the `sdk.Transformer` interface (`Receive` and `Return`).
+* `main.go` implementing self-contained standard IO processing with JSON output contract.
 * `go.mod` initialized.
 
 ### 2. Audit Structure & Security Locally
