@@ -36,3 +36,5 @@ go.work.sum
 # Socket and temporary files
 *.sock
 tmp/
+data/
+*.wasm

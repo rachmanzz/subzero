@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subzero Engine - Management Dashboard</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --primary: #38bdf8;
+      --primary-hover: #0ea5e9;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --success: #10b981;
+      --danger: #ef4444;
+      --code-bg: #030712;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 24px; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+    .logo { display: flex; align-items: center; gap: 12px; }
+    .logo h1 { font-size: 24px; font-weight: 700; color: var(--primary); letter-spacing: -0.5px; }
+    .badge { font-size: 11px; padding: 4px 8px; border-radius: 999px; background: rgba(56, 189, 248, 0.15); color: var(--primary); font-weight: 600; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .stat-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+    .stat-card .label { font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
+    .stat-card .value { font-size: 24px; font-weight: 700; color: var(--text); }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 22px; margin-bottom: 28px; }
+    .card h2 { font-size: 18px; margin-bottom: 16px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
+    input[type="text"], select { width: 100%; padding: 10px 12px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px; }
+    input[type="text"]:focus, select:focus { outline: none; border-color: var(--primary); }
+    .file-dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; cursor: pointer; transition: border-color 0.2s; margin-bottom: 16px; background: rgba(3, 7, 18, 0.5); }
+    .file-dropzone:hover { border-color: var(--primary); }
+    .btn { background: var(--primary); color: #030712; font-weight: 600; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }
+    .btn:hover { background: var(--primary-hover); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-danger { background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+    .btn-danger:hover { background: var(--danger); color: white; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .console { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 13px; color: #a7f3d0; max-height: 180px; overflow-y: auto; white-space: pre-wrap; display: none; margin-top: 16px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { padding: 12px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-muted); font-weight: 600; }
+    td { padding: 14px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    .empty-state { text-align: center; padding: 32px; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">
+        <h1>❄️ Subzero Engine</h1>
+        <span class="badge">API Management & Wasm Control Plane</span>
+      </div>
+      <div>
+        <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: var(--success);">● System Online</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="stat-card">
+        <div class="label">Total Wasm Modules</div>
+        <div class="value" id="stat-modules">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Compiler Adapter</div>
+        <div class="value" id="stat-compiler">Go Native (wasip1)</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Scale-to-Zero Engine</div>
+        <div class="value" style="color: var(--primary);">Active</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🚀 Direct Go to Wasm Compiler</h2>
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+        Unggah berkas kode Go (<code>.go</code>) logika transformasi tenant untuk langsung dikompilasi ke WebAssembly bytecode di server.
+      </p>
+
+      <form id="compile-form">
+        <div class="form-grid">
+          <div>
+            <label for="tenant-id">Tenant ID *</label>
+            <input type="text" id="tenant-id" placeholder="e.g. tenant-acme" required />
+          </div>
+          <div>
+            <label for="module-name">Module Name *</label>
+            <input type="text" id="module-name" placeholder="e.g. excel-transformer" required />
+          </div>
+          <div>
+            <label for="target-os">Target Wasm Architecture</label>
+            <select id="target-os">
+              <option value="wasip1" selected>wasip1 (WebAssembly System Interface)</option>
+              <option value="js">js (WebAssembly Browser / Node)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="file-dropzone" id="dropzone" onclick="document.getElementById('file-input').click()">
+          <input type="file" id="file-input" accept=".go" style="display: none;" onchange="handleFileSelect(this.files)" />
+          <div id="dropzone-text">
+            <span style="font-size: 24px; display: block; margin-bottom: 8px;">📄</span>
+            <strong>Pilih berkas Go (.go)</strong> atau drag-and-drop ke sini
+          </div>
+        </div>
+
+        <button type="submit" class="btn" id="btn-submit">
+          <span>⚡ Compile to Wasm</span>
+        </button>
+      </form>
+
+      <div class="console" id="console-output"></div>
+    </div>
+
+    <div class="card">
+      <h2>📦 Registered Wasm Modules</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Module ID</th>
+            <th>Tenant</th>
+            <th>Name</th>
+            <th>Target</th>
+            <th>Size</th>
+            <th>Created</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="modules-table">
+          <tr><td colspan="7" class="empty-state">Loading registered modules...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let selectedFile = null;
+
+    function handleFileSelect(files) {
+      if (files.length > 0) {
+        selectedFile = files[0];
+        document.getElementById('dropzone-text').innerHTML = `
+          <span style="font-size: 24px; display: block; margin-bottom: 8px;">✓</span>
+          <strong>${selectedFile.name}</strong> (${(selectedFile.size / 1024).toFixed(1)} KB)
+        `;
+      }
+    }
+
+    const dropzone = document.getElementById('dropzone');
+    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.style.borderColor = 'var(--primary)'; });
+    dropzone.addEventListener('dragleave', () => { dropzone.style.borderColor = 'var(--border)'; });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.style.borderColor = 'var(--border)';
+      if (e.dataTransfer.files.length > 0) {
+        handleFileSelect(e.dataTransfer.files);
+      }
+    });
+
+    async function loadModules() {
+      try {
+        const res = await fetch('/api/modules');
+        const modules = await res.json();
+        const tbody = document.getElementById('modules-table');
+        document.getElementById('stat-modules').textContent = modules ? modules.length : 0;
+
+        if (!modules || modules.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Belum ada modul Wasm yang dikompilasi.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = modules.map(m => `
+          <tr>
+            <td><code>${m.id}</code></td>
+            <td><strong>${m.tenant_id}</strong></td>
+            <td>${m.name}</td>
+            <td><span class="badge">${m.target}</span></td>
+            <td>${(m.size / (1024*1024)).toFixed(2)} MB</td>
+            <td style="color: var(--text-muted); font-size: 12px;">${new Date(m.created_at).toLocaleString()}</td>
+            <td>
+              <a href="/api/modules/${m.id}/download" class="btn btn-sm" style="text-decoration: none;" download="${m.name}.wasm">⬇ Wasm</a>
+              <button onclick="deleteModule('${m.id}')" class="btn btn-sm btn-danger">Hapus</button>
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error("Gagal memuat modul:", err);
+      }
+    }
+
+    async function deleteModule(id) {
+      if (!confirm(`Hapus modul ${id}?`)) return;
+      try {
+        await fetch(`/api/modules/${id}`, { method: 'DELETE' });
+        loadModules();
+      } catch (err) {
+        alert("Gagal menghapus modul: " + err);
+      }
+    }
+
+    document.getElementById('compile-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!selectedFile) {
+        alert("Silakan pilih berkas .go terlebih dahulu!");
+        return;
+      }
+
+      const btn = document.getElementById('btn-submit');
+      const consoleBox = document.getElementById('console-output');
+      btn.disabled = true;
+      btn.innerHTML = '⏳ Compiling...';
+      consoleBox.style.display = 'block';
+      consoleBox.textContent = `[Subzero Compiler] Memulai kompilasi ${selectedFile.name} ke target Wasm...\n`;
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('tenant_id', document.getElementById('tenant-id').value);
+      formData.append('module_name', document.getElementById('module-name').value);
+      formData.append('target_os', document.getElementById('target-os').value);
+
+      try {
+        const res = await fetch('/api/modules/compile', {
+          method: 'POST',
+          body: formData
+        });
+        const result = await res.json();
+
+        if (res.ok && result.success) {
+          consoleBox.textContent += `[Success] Wasm berhasil dikompilasi! Size: ${(result.size / (1024*1024)).toFixed(2)} MB in ${result.duration}\n${result.compiler_log || ''}`;
+          loadModules();
+        } else {
+          consoleBox.textContent += `[Error] Kompilasi gagal: ${result.error || result.compiler_log}\n`;
+        }
+      } catch (err) {
+        consoleBox.textContent += `[Error] Request gagal: ${err}\n`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '⚡ Compile to Wasm';
+      }
+    });
+
+    loadModules();
+  </script>
+</body>
+</html>

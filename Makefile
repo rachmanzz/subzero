@@ -7,6 +7,7 @@ build:
 	go build -o bin/subzero-supervisor ./cmd/subzero-supervisor
 	go build -o bin/subzero-worker ./cmd/subzero-worker
 	go build -o bin/subzero-cli ./cmd/subzero-cli
+	go build -o bin/subzero-admin ./cmd/subzero-admin
 
 test:
 	go test -v -race ./...
