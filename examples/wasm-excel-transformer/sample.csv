@@ -1,0 +1,6 @@
+id,client_name,amount,status
+1001,Acme Corporation,4500.50,CONFIRMED
+1002,Global Logistics,12000.00,CONFIRMED
+1003,Omega Retail,-50.00,INVALID_NEGATIVE
+1004,Zenith Tech,850.75,PENDING
+1005,Initech Corp,3100.25,CONFIRMED
