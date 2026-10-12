@@ -6,9 +6,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/rachmanzz/subzero/internal/runtime/wasm"
 	"github.com/rachmanzz/subzero/internal/worker"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 	"github.com/rachmanzz/subzero/pkg/transport"
@@ -41,6 +44,31 @@ func main() {
 	}
 	defer listener.Close()
 
+	wasmEngine, err := wasm.NewEngine(ctx, wasm.DefaultConfig())
+	if err != nil {
+		log.Printf("[Subzero Worker] Warning: Wazero engine failed to initialize: %v (Wasm execution disabled)", err)
+	} else {
+		defer wasmEngine.Close(ctx)
+	}
+
+	resolver := func(target string) ([]byte, error) {
+		// 1. Direct file path
+		if strings.HasSuffix(target, ".wasm") {
+			return os.ReadFile(target)
+		}
+		// 2. Check in data/wasm/<target>/module.wasm
+		dataPath := filepath.Join(".", "data", "wasm", target, "module.wasm")
+		if data, err := os.ReadFile(dataPath); err == nil {
+			return data, nil
+		}
+		return nil, os.ErrNotExist
+	}
+
+	var wasmHandler worker.HandlerFunc
+	if wasmEngine != nil {
+		wasmHandler = worker.NewWasmHandler(wasmEngine, resolver)
+	}
+
 	w := worker.New(worker.Config{
 		SecretKey:   []byte(*secretKey),
 		IdleTimeout: *idleTimeout,
@@ -50,6 +78,15 @@ func main() {
 		},
 	}, func(ctx context.Context, task *protocol.TaskMessage) (*protocol.ResultMessage, error) {
 		log.Printf("[Subzero Worker] Executing task %s (tenant: %s, target: %s)...", task.TaskID, task.TenantID, task.ActionTarget)
+
+		// If target can be resolved as Wasm, execute via Wasm sandbox
+		if wasmHandler != nil {
+			if _, err := resolver(task.ActionTarget); err == nil {
+				return wasmHandler(ctx, task)
+			}
+		}
+
+		// Native fallback
 		return &protocol.ResultMessage{
 			TaskID:        task.TaskID,
 			IsSuccess:     true,
