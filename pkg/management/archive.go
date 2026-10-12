@@ -66,8 +66,18 @@ func SafeUnpackTarGz(r io.Reader, destDir string, limits ArchiveLimits) error {
 			return fmt.Errorf("%w: maximum allowed is %d", ErrTooManyFiles, limits.MaxFileCount)
 		}
 
-		// Prevent Zip-Slip: Clean target path and ensure it starts with destClean
-		target := filepath.Join(destDir, header.Name)
+		// Prevent Zip-Slip: Convert Windows backslashes and check traversal
+		normalizedName := strings.ReplaceAll(header.Name, "\\", "/")
+		if strings.HasPrefix(normalizedName, "/") || strings.Contains(normalizedName, ":") {
+			return fmt.Errorf("%w: %s", ErrZipSlipAttempt, header.Name)
+		}
+		for _, part := range strings.Split(normalizedName, "/") {
+			if part == ".." {
+				return fmt.Errorf("%w: %s", ErrZipSlipAttempt, header.Name)
+			}
+		}
+
+		target := filepath.Join(destDir, filepath.FromSlash(normalizedName))
 		targetClean := filepath.Clean(target)
 		if !strings.HasPrefix(targetClean, destClean+string(filepath.Separator)) && targetClean != destClean {
 			return fmt.Errorf("%w: %s", ErrZipSlipAttempt, header.Name)

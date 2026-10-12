@@ -2,44 +2,70 @@ package sdk_test
 
 import (
 	"context"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/rachmanzz/subzero/pkg/sdk"
 )
 
-type mockTransformer struct {
-	receivedReq *sdk.Request
-	outputData  []byte
-	rowsCount   int
+// csvUppercaseTransformer implements a real data transformer parsing CSV lines,
+// converting text columns to uppercase, and counting processed records.
+type csvUppercaseTransformer struct {
+	processedRows int
+	transformed   []byte
+	hasReceived   bool
 }
 
-func (m *mockTransformer) Receive(ctx context.Context, req *sdk.Request) error {
-	m.receivedReq = req
+func (c *csvUppercaseTransformer) Receive(ctx context.Context, req *sdk.Request) error {
+	if req == nil {
+		return errors.New("request cannot be nil")
+	}
+	lines := strings.Split(strings.TrimSpace(string(req.Payload)), "\n")
+	var outLines []string
+	var count int
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// uppercase fields
+		outLines = append(outLines, strings.ToUpper(trimmed))
+		count++
+	}
+	c.processedRows = count
+	c.transformed = []byte(strings.Join(outLines, "\n"))
+	c.hasReceived = true
 	return nil
 }
 
-func (m *mockTransformer) Return(ctx context.Context) (*sdk.Response, error) {
+func (c *csvUppercaseTransformer) Return(ctx context.Context) (*sdk.Response, error) {
+	if !c.hasReceived {
+		return nil, errors.New("cannot return response before receive is invoked")
+	}
 	return &sdk.Response{
 		IsSuccess:     true,
-		ProcessedRows: m.rowsCount,
-		Data:          m.outputData,
+		ProcessedRows: c.processedRows,
+		Data:          c.transformed,
+		Metadata: map[string]string{
+			"encoding": "utf-8",
+			"action":   "uppercase",
+		},
 	}, nil
 }
 
 func TestTransformerInterfaceReceiveAndReturn(t *testing.T) {
-	trans := &mockTransformer{
-		outputData: []byte("canonical-output-data"),
-		rowsCount:  42,
-	}
+	trans := &csvUppercaseTransformer{}
 
 	fn := sdk.FromTransformer(trans)
 
+	csvInput := "id,name,role\n1,alice,developer\n2,bob,tester\n3,carol,architect"
 	req := &sdk.Request{
 		TaskID:       "task-123",
 		TenantID:     "tenant-acme",
-		ActionTarget: "parser-x",
-		Payload:      []byte("raw-input-data"),
+		ActionTarget: "csv-normalizer",
+		Payload:      []byte(csvInput),
 	}
 
 	resp, err := fn(context.Background(), req)
@@ -47,12 +73,22 @@ func TestTransformerInterfaceReceiveAndReturn(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if trans.receivedReq == nil || trans.receivedReq.TaskID != "task-123" {
-		t.Fatalf("expected request to be received, got: %+v", trans.receivedReq)
+	if !resp.IsSuccess {
+		t.Fatalf("expected success, got failure: %s", resp.ErrorMessage)
 	}
 
-	if !resp.IsSuccess || resp.ProcessedRows != 42 || string(resp.Data) != "canonical-output-data" {
-		t.Fatalf("unexpected response returned: %+v", resp)
+	// 4 lines total (header + 3 records)
+	if resp.ProcessedRows != 4 {
+		t.Fatalf("expected 4 processed rows, got: %d", resp.ProcessedRows)
+	}
+
+	expectedTransformed := "ID,NAME,ROLE\n1,ALICE,DEVELOPER\n2,BOB,TESTER\n3,CAROL,ARCHITECT"
+	if string(resp.Data) != expectedTransformed {
+		t.Fatalf("transformed output mismatch:\nwant:\n%s\ngot:\n%s", expectedTransformed, string(resp.Data))
+	}
+
+	if resp.Metadata["action"] != "uppercase" {
+		t.Fatalf("expected metadata action 'uppercase', got: %v", resp.Metadata)
 	}
 }
 

@@ -232,3 +232,126 @@ func TestPackTarGz(t *testing.T) {
 		t.Errorf("ignored.bin should not have been packed")
 	}
 }
+
+func TestUnpackTarGz_ZipSlipVariants(t *testing.T) {
+	// Test variants of directory traversal: Windows backslashes, absolute paths, nested traversal
+	variants := []struct {
+		name      string
+		entryName string
+	}{
+		{"Absolute path", "/etc/passwd.go"},
+		{"Nested traversal", "foo/../../bar.go"},
+		{"Deep nested traversal", "a/b/../../../etc/shadow.go"},
+		{"Windows backslash traversal", `..\..\evil.go`},
+		{"Windows absolute backslash", `C:\Windows\System32\cmd.go`},
+	}
+
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			archiveBytes, err := createTestTarGz(map[string]string{
+				v.entryName: "package main\nfunc main() {}",
+			})
+			if err != nil {
+				t.Fatalf("failed to create tar: %v", err)
+			}
+
+			destDir := t.TempDir()
+			err = management.SafeUnpackTarGz(bytes.NewReader(archiveBytes), destDir, management.DefaultArchiveLimits())
+			if err == nil {
+				t.Fatalf("expected Zip-Slip rejection for entry %q, got nil", v.entryName)
+			}
+			if !errors.Is(err, management.ErrZipSlipAttempt) {
+				t.Logf("entry %q was rejected with: %v", v.entryName, err)
+			}
+		})
+	}
+}
+
+func TestUnpackTarGz_SymlinkAndSpecialHeadersIgnored(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Add regular file
+	regHdr := &tar.Header{
+		Name:     "main.go",
+		Mode:     0644,
+		Size:     int64(len("package main\nfunc main() {}")),
+		Typeflag: tar.TypeReg,
+	}
+	_ = tw.WriteHeader(regHdr)
+	_, _ = tw.Write([]byte("package main\nfunc main() {}"))
+
+	// Add symlink entry pointing outside
+	symHdr := &tar.Header{
+		Name:     "symlink_attack",
+		Linkname: "/etc/passwd",
+		Typeflag: tar.TypeSymlink,
+	}
+	_ = tw.WriteHeader(symHdr)
+
+	// Add hardlink entry
+	linkHdr := &tar.Header{
+		Name:     "link_attack",
+		Linkname: "main.go",
+		Typeflag: tar.TypeLink,
+	}
+	_ = tw.WriteHeader(linkHdr)
+
+	_ = tw.Close()
+	_ = gw.Close()
+
+	destDir := t.TempDir()
+	err := management.SafeUnpackTarGz(bytes.NewReader(buf.Bytes()), destDir, management.DefaultArchiveLimits())
+	if err != nil {
+		t.Fatalf("SafeUnpackTarGz should succeed while ignoring symlinks/hardlinks, got: %v", err)
+	}
+
+	// Verify symlink was skipped and not created
+	if _, err := os.Lstat(filepath.Join(destDir, "symlink_attack")); !os.IsNotExist(err) {
+		t.Fatal("symlink_attack should have been ignored and not created")
+	}
+	if _, err := os.Lstat(filepath.Join(destDir, "link_attack")); !os.IsNotExist(err) {
+		t.Fatal("link_attack should have been ignored and not created")
+	}
+	// Verify main.go was extracted
+	if _, err := os.Stat(filepath.Join(destDir, "main.go")); err != nil {
+		t.Fatalf("main.go should exist: %v", err)
+	}
+}
+
+func TestUnpackTarGz_ExactByteLimitBoundary(t *testing.T) {
+	content := "package main\nfunc main() {}"
+	exactLen := int64(len(content))
+
+	archiveBytes, err := createTestTarGz(map[string]string{
+		"main.go": content,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destDir := t.TempDir()
+	// When limit == exactLen, unpacking exactly exactLen bytes should succeed
+	err = management.SafeUnpackTarGz(bytes.NewReader(archiveBytes), destDir, management.ArchiveLimits{
+		MaxFileCount:         10,
+		MaxUncompressedBytes: exactLen,
+	})
+	if err != nil {
+		t.Fatalf("expected unpack to succeed at exact limit boundary (%d bytes), got: %v", exactLen, err)
+	}
+
+	// When limit == exactLen - 1, unpacking should fail
+	destDir2 := t.TempDir()
+	err = management.SafeUnpackTarGz(bytes.NewReader(archiveBytes), destDir2, management.ArchiveLimits{
+		MaxFileCount:         10,
+		MaxUncompressedBytes: exactLen - 1,
+	})
+	if err == nil {
+		t.Fatal("expected unpack to fail when size exceeds limit by 1 byte")
+	}
+	if !errors.Is(err, management.ErrArchiveTooLarge) {
+		t.Fatalf("expected ErrArchiveTooLarge, got: %v", err)
+	}
+}
+

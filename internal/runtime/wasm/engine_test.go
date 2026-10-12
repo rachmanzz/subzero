@@ -219,3 +219,107 @@ func main() {
 		t.Fatalf("expected ErrMemoryLimitExceeded, got: %v", err)
 	}
 }
+
+func TestWasmEngine_RuntimeParameterMatrix(t *testing.T) {
+	ctx := context.Background()
+
+	normalSource := `package main
+import "fmt"
+func main() { fmt.Println("matrix-normal") }`
+	wasmBytesNormal := compileHelper(t, normalSource)
+
+	loopSource := `package main
+func main() {
+	for { compute() }
+}
+//go:noinline
+func compute() int { return 1 }`
+	wasmBytesLoop := compileHelper(t, loopSource)
+
+	type matrixCase struct {
+		name                      string
+		wasm                      []byte
+		pages                     uint32
+		timeout                   time.Duration
+		disableCloseOnContextDone bool
+		expectErr                 error
+		expectExitCode            uint32
+	}
+
+	cases := []matrixCase{
+		{
+			name:                      "normal_standard_pages_with_preemption",
+			wasm:                      wasmBytesNormal,
+			pages:                     512,
+			timeout:                   5 * time.Second,
+			disableCloseOnContextDone: false,
+			expectErr:                 nil,
+			expectExitCode:            0,
+		},
+		{
+			name:                      "normal_standard_pages_without_preemption",
+			wasm:                      wasmBytesNormal,
+			pages:                     512,
+			timeout:                   5 * time.Second,
+			disableCloseOnContextDone: true,
+			expectErr:                 nil,
+			expectExitCode:            0,
+		},
+		{
+			name:                      "insufficient_memory_pages",
+			wasm:                      wasmBytesNormal,
+			pages:                     1,
+			timeout:                   5 * time.Second,
+			disableCloseOnContextDone: false,
+			expectErr:                 wasm.ErrMemoryLimitExceeded,
+		},
+		{
+			name:                      "timeout_preemption_active",
+			wasm:                      wasmBytesLoop,
+			pages:                     512,
+			timeout:                   200 * time.Millisecond,
+			disableCloseOnContextDone: false,
+			expectErr:                 wasm.ErrExecutionTimeout,
+			expectExitCode:            124,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := wasm.Config{
+				MemoryLimitPages:          tc.pages,
+				DefaultTimeout:            tc.timeout,
+				DisableCloseOnContextDone: tc.disableCloseOnContextDone,
+			}
+			engine, err := wasm.NewEngine(ctx, cfg)
+			if err != nil {
+				t.Fatalf("NewEngine failed: %v", err)
+			}
+			defer engine.Close(ctx)
+
+			execRes, err := engine.Execute(ctx, tc.wasm, wasm.ExecOptions{
+				Timeout: tc.timeout,
+			})
+
+			if tc.expectErr != nil {
+				if err == nil {
+					t.Fatalf("expected error %v, got nil", tc.expectErr)
+				}
+				if !errors.Is(err, tc.expectErr) {
+					t.Fatalf("expected error %v, got %v", tc.expectErr, err)
+				}
+				if tc.expectExitCode != 0 && execRes != nil && execRes.ExitCode != tc.expectExitCode {
+					t.Errorf("expected exit code %d, got %d", tc.expectExitCode, execRes.ExitCode)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if execRes.ExitCode != tc.expectExitCode {
+					t.Errorf("expected exit code %d, got %d", tc.expectExitCode, execRes.ExitCode)
+				}
+			}
+		})
+	}
+}
+

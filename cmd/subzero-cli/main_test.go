@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"flag"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rachmanzz/subzero/pkg/management"
@@ -322,4 +324,80 @@ func TestCLI_TaskRequestUpload(t *testing.T) {
 		t.Fatal("expected missing -ref error, got nil")
 	}
 }
+
+func TestCLI_ModuleInitFlags(t *testing.T) {
+	tmpDir := t.TempDir()
+	modDir := filepath.Join(tmpDir, "new-mod")
+
+	err := handleModuleInit([]string{
+		"-name", "custom-filter",
+		"-tenant", "tenant-test",
+		modDir,
+	})
+	if err != nil {
+		t.Fatalf("handleModuleInit failed: %v", err)
+	}
+
+	// Verify generated config.zero, readme.md, main.go
+	for _, expectedFile := range []string{"config.zero", "readme.md", "main.go"} {
+		p := filepath.Join(modDir, expectedFile)
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("expected generated file %s to exist: %v", p, err)
+		}
+	}
+
+	cfgContent, _ := os.ReadFile(filepath.Join(modDir, "config.zero"))
+	if !strings.Contains(string(cfgContent), "name: custom-filter") {
+		t.Fatalf("expected config.zero to contain custom-filter name, got: %s", string(cfgContent))
+	}
+}
+
+func TestCLI_ParseFlexible(t *testing.T) {
+	fs := flag.NewFlagSet("test-flexible", flag.ContinueOnError)
+	name := fs.String("name", "", "Name")
+	active := fs.Bool("active", false, "Active flag")
+	count := fs.Int("count", 0, "Count")
+
+	// Interleaved positional and flag arguments: <pos1> -name <val> <pos2> -active -count 42 <pos3>
+	args := []string{"first-dir", "-name", "my-mod", "second-dir", "-active", "-count", "42", "third-dir"}
+	positionals, err := parseFlexible(fs, args)
+	if err != nil {
+		t.Fatalf("parseFlexible failed: %v", err)
+	}
+
+	if *name != "my-mod" {
+		t.Errorf("expected name 'my-mod', got %q", *name)
+	}
+	if !*active {
+		t.Errorf("expected active to be true")
+	}
+	if *count != 42 {
+		t.Errorf("expected count 42, got %d", *count)
+	}
+
+	expectedPos := []string{"first-dir", "second-dir", "third-dir"}
+	if len(positionals) != len(expectedPos) {
+		t.Fatalf("expected %d positionals, got %d: %+v", len(expectedPos), len(positionals), positionals)
+	}
+	for i, p := range expectedPos {
+		if positionals[i] != p {
+			t.Errorf("positional[%d] = %q, want %q", i, positionals[i], p)
+		}
+	}
+}
+
+func TestCLI_HandleModuleCommandDispatch(t *testing.T) {
+	// Unknown command
+	err := handleModuleCommand([]string{"nonexistent-command"})
+	if err == nil {
+		t.Fatal("expected error for unknown module subcommand, got nil")
+	}
+
+	// Empty args shows help and returns nil
+	err = handleModuleCommand([]string{})
+	if err != nil {
+		t.Fatalf("expected nil for empty args, got: %v", err)
+	}
+}
+
 

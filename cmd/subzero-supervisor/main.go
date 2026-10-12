@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ func main() {
 	scheme := flag.String("scheme", "unix", "Transport scheme for Supervisor (unix, tcp, http)")
 	endpoint := flag.String("endpoint", "/tmp/subzero-supervisor.sock", "Listen socket path or address")
 	workerBin := flag.String("worker-bin", "./bin/subzero-worker", "Path to subzero-worker executable")
+	workerScheme := flag.String("worker-scheme", "", "Transport scheme for worker communication (defaults to unix if .sock, else supervisor scheme)")
 	workerEndpoint := flag.String("worker-endpoint", "/tmp/subzero-worker-spawned.sock", "Socket path or address for spawned worker")
 	spawnerType := flag.String("spawner", "process", "Worker spawner type: process or container (PRD 5.2)")
 	containerEngine := flag.String("container-engine", "docker", "Container engine (docker or podman)")
@@ -34,11 +36,25 @@ func main() {
 	idleTimeout := flag.Duration("idle-timeout", 15*time.Second, "Worker idle timeout before scale-to-zero")
 	flag.Parse()
 
-	log.Printf("[Subzero Supervisor] Starting daemon on %s://%s (concurrency: %d, spawner: %s)...", *scheme, *endpoint, *concurrency, *spawnerType)
+	actualWorkerScheme := *workerScheme
+	if actualWorkerScheme == "" {
+		if strings.HasSuffix(*workerEndpoint, ".sock") || strings.HasPrefix(*workerEndpoint, "/") {
+			actualWorkerScheme = "unix"
+		} else {
+			actualWorkerScheme = *scheme
+		}
+	}
+
+	log.Printf("[Subzero Supervisor] Starting daemon on %s://%s (concurrency: %d, spawner: %s, workerScheme: %s)...", *scheme, *endpoint, *concurrency, *spawnerType, actualWorkerScheme)
 
 	tr, err := transport.Get(*scheme)
 	if err != nil {
 		log.Fatalf("[Subzero Supervisor] Invalid transport scheme: %v", err)
+	}
+
+	workerTr, err := transport.Get(actualWorkerScheme)
+	if err != nil {
+		log.Fatalf("[Subzero Supervisor] Invalid worker transport scheme: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -56,7 +72,7 @@ func main() {
 		spawner, err = supervisor.NewContainerSpawner(supervisor.ContainerSpawnerConfig{
 			Engine:       *containerEngine,
 			Image:        *containerImage,
-			Scheme:       *scheme,
+			Scheme:       actualWorkerScheme,
 			Endpoint:     *workerEndpoint,
 			SecretKey:    []byte(*secretKey),
 			IdleTimeout:  *idleTimeout,
@@ -74,7 +90,7 @@ func main() {
 
 		spawner, err = supervisor.NewProcessSpawner(supervisor.SpawnerConfig{
 			WorkerBinary: binPath,
-			Scheme:       *scheme,
+			Scheme:       actualWorkerScheme,
 			Endpoint:     *workerEndpoint,
 			SecretKey:    []byte(*secretKey),
 			IdleTimeout:  *idleTimeout,
@@ -122,7 +138,7 @@ func main() {
 			}
 		}
 
-		go handleClientTask(ctx, conn, tr, spawner, dispatcher, *workerEndpoint, []byte(*secretKey))
+		go handleClientTask(ctx, conn, workerTr, spawner, dispatcher, *workerEndpoint, []byte(*secretKey))
 	}
 }
 

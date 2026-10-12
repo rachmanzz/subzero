@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,23 +179,22 @@ func TestTCPTransport_mTLS(t *testing.T) {
 	secretKey := []byte("mtls-secret-key-32-bytes-subzero")
 	testPayload := []byte("secure mTLS message payload")
 
-	serverErrCh := make(chan error, 1)
 	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			serverErrCh <- err
-			return
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				// listener closed
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				received, err := protocol.ReadFrame(c, secretKey, 0)
+				if err != nil {
+					return
+				}
+				_ = protocol.WriteFrame(c, append([]byte("mtls-ack: "), received...), secretKey)
+			}(conn)
 		}
-		defer conn.Close()
-
-		received, err := protocol.ReadFrame(conn, secretKey, 0)
-		if err != nil {
-			serverErrCh <- err
-			return
-		}
-
-		_ = protocol.WriteFrame(conn, append([]byte("mtls-ack: "), received...), secretKey)
-		serverErrCh <- nil
 	}()
 
 	clientConn, err := clientTransport.Dial(ctx, endpoint)
@@ -217,10 +217,6 @@ func TestTCPTransport_mTLS(t *testing.T) {
 		t.Fatalf("unexpected mTLS reply: %q", reply)
 	}
 
-	if err := <-serverErrCh; err != nil {
-		t.Fatalf("server mTLS error: %v", err)
-	}
-
 	// Verify that unauthenticated client (no client cert) is rejected by mTLS server
 	unauthTransport := tcp.New(&tcp.TLSConfig{
 		CAPEM:      caCertPEM,
@@ -229,16 +225,36 @@ func TestTCPTransport_mTLS(t *testing.T) {
 	unauthConn, err := unauthTransport.Dial(ctx, endpoint)
 	if err != nil {
 		// Connection was rejected during Dial / TLS handshake as expected
-		t.Logf("✓ Unauthenticated client rejected at Dial time: %v", err)
+		errStr := strings.ToLower(err.Error())
+		if !strings.Contains(errStr, "tls") && !strings.Contains(errStr, "certificate") && !strings.Contains(errStr, "handshake") {
+			t.Fatalf("expected dial failure to be caused by TLS/certificate error, got: %v", err)
+		}
+		t.Logf("✓ Unauthenticated client rejected at Dial time due to TLS: %v", err)
 	} else {
-		// If dial succeeded (e.g. deferred TLS handshake), attempting frame write/read must fail
+		// If dial succeeded (e.g. deferred TLS handshake), attempting frame write/read must fail with TLS or connection error
 		_ = protocol.WriteFrame(unauthConn, testPayload, secretKey)
 		_, readErr := protocol.ReadFrame(unauthConn, secretKey, 0)
 		_ = unauthConn.Close()
 		if readErr == nil {
 			t.Fatal("expected unauthenticated client connection to fail on mTLS listener, but frame read succeeded")
 		}
+		errStr := strings.ToLower(readErr.Error())
+		if !strings.Contains(errStr, "tls") && !strings.Contains(errStr, "certificate") && !strings.Contains(errStr, "eof") && !strings.Contains(errStr, "reset") {
+			t.Fatalf("expected read error to be caused by TLS handshake/reset, got: %v", readErr)
+		}
 		t.Logf("✓ Unauthenticated client rejected at handshake/read time: %v", readErr)
+	}
+
+	// Verify plaintext client without TLS is rejected
+	plainConn, err := net.Dial("tcp", endpoint)
+	if err == nil {
+		_ = protocol.WriteFrame(plainConn, testPayload, secretKey)
+		_, plainReadErr := protocol.ReadFrame(plainConn, secretKey, 0)
+		_ = plainConn.Close()
+		if plainReadErr == nil {
+			t.Fatal("expected plaintext connection to mTLS server to fail")
+		}
+		t.Logf("✓ Plaintext connection to mTLS server rejected: %v", plainReadErr)
 	}
 }
 

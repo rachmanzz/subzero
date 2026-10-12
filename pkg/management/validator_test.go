@@ -229,6 +229,16 @@ import _ "runtime/cgo"
 func main() {}`,
 			rule: "FORBIDDEN_IMPORT",
 		},
+		{
+			name: "cgo literal import C",
+			sourceCode: `package main
+/*
+#include <stdio.h>
+*/
+import "C"
+func main() {}`,
+			rule: "CGO_FORBIDDEN",
+		},
 	}
 
 	for _, tt := range tests {
@@ -411,4 +421,76 @@ func main() {}
 		t.Fatalf("expected path %q in ReadOnly permissions, got: %+v", validPath, pkgInfo.Config.Permissions.Filesystem.ReadOnly)
 	}
 }
+
+func TestAuditSecurity_NestedSubdirectoryForbiddenImport(t *testing.T) {
+	dir := createTestPkgDir(t, map[string]string{
+		"main.go": `package main
+func main() {}
+`,
+		"sub/helper/util.go": `package helper
+import "os/exec"
+func Run() { _ = exec.Command("sh") }
+`,
+	})
+	defer os.RemoveAll(dir)
+
+	report, err := management.AuditSecurity(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if report.Approved {
+		t.Fatal("expected security audit to fail for nested forbidden import")
+	}
+
+	var found bool
+	for _, v := range report.Violations {
+		if v.Rule == "FORBIDDEN_IMPORT" && v.File == "util.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected FORBIDDEN_IMPORT violation in nested util.go, got: %+v", report.Violations)
+	}
+}
+
+func TestVerifyStructure_PermissionEscalationForbiddenPaths(t *testing.T) {
+	escalationCases := []struct {
+		name    string
+		path    string
+		isWrite bool
+	}{
+		{"sensitive /etc read", "/etc/shadow", false},
+		{"sensitive /root read", "/root/.ssh/id_rsa", false},
+		{"sensitive /dev write", "/dev/sda1", true},
+		{"sensitive /proc read", "/proc/sys/kernel", false},
+		{"sensitive /sys write", "/sys/class", true},
+		{"relative path traversal attempt", "relative/path/to/data", false},
+	}
+
+	for _, tc := range escalationCases {
+		t.Run(tc.name, func(t *testing.T) {
+			permField := "permissions.filesystem.read_only"
+			if tc.isWrite {
+				permField = "permissions.filesystem.read_write"
+			}
+
+			dir := createTestPkgDir(t, map[string]string{
+				"config.zero": fmt.Sprintf("name: escalate-test\n%s: %s\n", permField, tc.path),
+				"readme.md":   "# Documentation",
+				"main.go": `package main
+func main() {}
+`,
+			})
+			defer os.RemoveAll(dir)
+
+			_, err := management.VerifyModulePackage(dir)
+			if err == nil {
+				t.Fatalf("expected permission escalation to be rejected for path %q, got nil", tc.path)
+			}
+			t.Logf("✓ Path %q safely rejected: %v", tc.path, err)
+		})
+	}
+}
+
 
