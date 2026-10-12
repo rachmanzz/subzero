@@ -293,6 +293,7 @@ func VerifyModulePackage(rootPath string) (*ModulePackageInfo, error) {
 		Config:        cfg,
 		MainFile:      mainPath,
 		ReadmePath:    readmePath,
+		ReadmeContent: string(readmeData),
 	}, nil
 }
 

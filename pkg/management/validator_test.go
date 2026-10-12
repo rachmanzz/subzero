@@ -56,6 +56,9 @@ func main() {
 	if pkgInfo.Config.Name != "my-parser" {
 		t.Errorf("expected module name my-parser, got %s", pkgInfo.Config.Name)
 	}
+	if pkgInfo.ReadmeContent != "# Parser Documentation\nNormalizes data." {
+		t.Errorf("expected ReadmeContent to be populated, got: %q", pkgInfo.ReadmeContent)
+	}
 
 	// VerifyStructure alias check
 	mainFile, err := management.VerifyStructure(dir)
@@ -219,6 +222,13 @@ import "plugin"
 func main() { _, _ = plugin.Open("p.so") }`,
 			rule: "FORBIDDEN_IMPORT",
 		},
+		{
+			name: "runtime/cgo import",
+			sourceCode: `package main
+import _ "runtime/cgo"
+func main() {}`,
+			rule: "FORBIDDEN_IMPORT",
+		},
 	}
 
 	for _, tt := range tests {
@@ -250,68 +260,69 @@ func main() { _, _ = plugin.Open("p.so") }`,
 }
 
 func TestAuditSecurity_NetworkListenerBackdoor(t *testing.T) {
-	dir := createTestPkgDir(t, map[string]string{
-		"main.go": `package main
-
+	for _, call := range []string{`net.Listen("tcp", ":8080")`, `net.ListenPacket("udp", ":8080")`} {
+		dir := createTestPkgDir(t, map[string]string{
+			"main.go": fmt.Sprintf(`package main
 import "net"
-
 func main() {
-	l, _ := net.Listen("tcp", ":8080")
+	l, _ := %s
 	_ = l
 }
-`,
-	})
-	defer os.RemoveAll(dir)
+`, call),
+		})
+		defer os.RemoveAll(dir)
 
-	report, err := management.AuditSecurity(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if report.Approved {
-		t.Fatal("expected audit to fail for net.Listen backdoor")
-	}
-
-	found := false
-	for _, v := range report.Violations {
-		if v.Rule == "NETWORK_LISTENER_BACKDOOR" {
-			found = true
-			break
+		report, err := management.AuditSecurity(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-	}
-	if !found {
-		t.Fatalf("expected NETWORK_LISTENER_BACKDOOR rule violation, got: %+v", report.Violations)
+		if report.Approved {
+			t.Fatalf("expected audit to fail for %s backdoor", call)
+		}
+
+		found := false
+		for _, v := range report.Violations {
+			if v.Rule == "NETWORK_LISTENER_BACKDOOR" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected NETWORK_LISTENER_BACKDOOR rule violation for %s, got: %+v", call, report.Violations)
+		}
 	}
 }
 
 func TestAuditSecurity_ReverseShellLiteral(t *testing.T) {
-	dir := createTestPkgDir(t, map[string]string{
-		"main.go": `package main
-
+	for _, shell := range []string{"/bin/bash", "/bin/sh", "cmd.exe", "powershell"} {
+		dir := createTestPkgDir(t, map[string]string{
+			"main.go": fmt.Sprintf(`package main
 func main() {
-	cmd := "/bin/bash"
+	cmd := %q
 	_ = cmd
 }
-`,
-	})
-	defer os.RemoveAll(dir)
+`, shell),
+		})
+		defer os.RemoveAll(dir)
 
-	report, err := management.AuditSecurity(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if report.Approved {
-		t.Fatal("expected audit to fail for reverse shell literal")
-	}
-
-	found := false
-	for _, v := range report.Violations {
-		if v.Rule == "SHELL_LITERAL_DETECTED" {
-			found = true
-			break
+		report, err := management.AuditSecurity(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-	}
-	if !found {
-		t.Fatalf("expected SHELL_LITERAL_DETECTED rule violation, got: %+v", report.Violations)
+		if report.Approved {
+			t.Fatalf("expected audit to fail for shell literal %q", shell)
+		}
+
+		found := false
+		for _, v := range report.Violations {
+			if v.Rule == "SHELL_LITERAL_DETECTED" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected SHELL_LITERAL_DETECTED rule violation for %s, got: %+v", shell, report.Violations)
+		}
 	}
 }
 
@@ -378,6 +389,26 @@ func main() {}
 		if err == nil || !strings.Contains(err.Error(), "path traversal forbidden") {
 			t.Fatalf("expected 'path traversal forbidden' error for path %q, got: %v", badPath, err)
 		}
+	}
+}
+
+func TestVerifyStructure_PermissionsValidPathWithDotsInSegment(t *testing.T) {
+	validPath := "/tmp/backup..v2/input"
+	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": fmt.Sprintf("name: dots-module\npermissions.filesystem.read_only: %s\n", validPath),
+		"readme.md":   "# Docs",
+		"main.go": `package main
+func main() {}
+`,
+	})
+	defer os.RemoveAll(dir)
+
+	pkgInfo, err := management.VerifyModulePackage(dir)
+	if err != nil {
+		t.Fatalf("expected valid path %q with dots in segment to be accepted, got: %v", validPath, err)
+	}
+	if len(pkgInfo.Config.Permissions.Filesystem.ReadOnly) == 0 || pkgInfo.Config.Permissions.Filesystem.ReadOnly[0] != validPath {
+		t.Fatalf("expected path %q in ReadOnly permissions, got: %+v", validPath, pkgInfo.Config.Permissions.Filesystem.ReadOnly)
 	}
 }
 

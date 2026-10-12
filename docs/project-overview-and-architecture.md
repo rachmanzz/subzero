@@ -164,8 +164,8 @@ The Supervisor supports two interchangeable spawner mechanisms ([`internal/super
 
 | Spawner Mode | Underlying Mechanism | Best For | Cold-Start Performance |
 | :--- | :--- | :--- | :--- |
-| **Native Process (`-spawner=process`)** | Spawns `subzero-worker` executable via `os/exec` over local Unix Domain Socket (`.sock`). | Bare-metal, virtual machines, local edge instances. | **< 100 milliseconds** (enforced by benchmark assertions, typically ~10-15ms) |
-| **Containerized (`-spawner=container`)** | Spawns worker containers (`subzero-worker:latest`) via Docker / Podman CLI with volume-mounted sockets or TCP ports. | Cloud environments requiring kernel-level namespace/cgroup isolation. | **On-demand container start** (~100-300ms depending on container runtime) |
+| **Native Process (`-spawner=process`)** | Spawns `subzero-worker` executable via `os/exec` over local Unix Domain Socket (`.sock`). | Bare-metal, virtual machines, local edge instances. | **< 100 milliseconds** (enforced by benchmark assertions) |
+| **Containerized (`-spawner=container`)** | Spawns worker containers (`subzero-worker:latest`) via Docker / Podman CLI with volume-mounted sockets or TCP ports. | Cloud environments requiring kernel-level namespace/cgroup isolation. | **On-demand container start** (subject to host container runtime) |
 
 ---
 
