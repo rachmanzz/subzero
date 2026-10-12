@@ -86,8 +86,7 @@ type Compiler interface {
 Located in [`pkg/management/gocompiler.go`](../pkg/management/gocompiler.go):
 * Uses the host's standard Go compiler (`go build`).
 * Compiles for **WASI** (`GOOS=wasip1 GOARCH=wasm`).
-* Automatically applies optimization flags (`-ldflags="-s -w"`) to strip debug symbols and minimize binary size.
-* Average compilation time is under **100 milliseconds** for typical transformation scripts.
+* Fast compilation time for typical transformation scripts without external toolchain overhead.
 
 ---
 

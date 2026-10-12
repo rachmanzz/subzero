@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -34,13 +35,26 @@ func (c *JSONCodec) Unmarshal(data []byte, v any) error {
 	return nil
 }
 
-// EncodeTask encodes a TaskMessage into framed bytes with signature.
+// EncodeTask serializes a TaskMessage into byte payload. Note: wire framing and HMAC-SHA256 signatures are applied during transmission via WriteFrame.
 func EncodeTask(task *TaskMessage, secretKey []byte) ([]byte, error) {
 	data, err := DefaultCodec.Marshal(task)
 	if err != nil {
 		return nil, err
 	}
 	return data, nil
+}
+
+// EncodeFramedTask serializes and applies 36-byte framing and HMAC-SHA256 signature to a TaskMessage.
+func EncodeFramedTask(task *TaskMessage, secretKey []byte) ([]byte, error) {
+	data, err := DefaultCodec.Marshal(task)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := WriteFrame(&buf, data, secretKey); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // DecodeTask decodes a raw payload into TaskMessage.

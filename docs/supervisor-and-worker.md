@@ -13,7 +13,7 @@ Located in [`internal/supervisor/dispatcher.go`](../internal/supervisor/dispatch
 > * `v3/queue`: Pluggable multi-driver queue broker (Redis, NATS, RabbitMQ, PostgreSQL) from `fiber-extras`, used optionally at the API Gateway / Producer level for persistent buffering.
 
 ### Key Architectural Characteristics
-1. **Zero External Dependencies**: Implemented in 100% pure Go standard library without framework overhead.
+1. **Minimal External Dependencies**: Implemented with pure-Go, minimal third-party footprint and without heavy framework overhead.
 2. **Throttling Semaphore**:
    * Uses a channel-based semaphore (`chan struct{}`) bounded by `Concurrency` (default: 16).
    * Prevents system resource exhaustion (CPU/RAM) during sudden burst traffic.

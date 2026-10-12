@@ -210,6 +210,14 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 			}
 		}
 
+		// Stream task.SourceURI into Stdin if specified and Stdin not yet provided (PRD 5.3: Zero local disk files)
+		if task.SourceURI != "" && execOpts.Stdin == nil {
+			if stream, err := storage.OpenStream(ctx, task.SourceURI); err == nil {
+				defer stream.Close()
+				execOpts.Stdin = stream
+			}
+		}
+
 		storageGet := cfg.StorageGet
 		if storageGet == nil {
 			storageGet = func(c context.Context, key string) ([]byte, error) {

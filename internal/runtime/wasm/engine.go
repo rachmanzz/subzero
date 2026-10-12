@@ -67,7 +67,7 @@ func NewEngine(ctx context.Context, cfg Config) (*Engine, error) {
 	}
 
 	rtCfg := wazero.NewRuntimeConfig().
-		WithCloseOnContextDone(true).
+		WithCloseOnContextDone(cfg.EnableCloseOnContextDone).
 		WithMemoryLimitPages(cfg.MemoryLimitPages)
 
 	rt := wazero.NewRuntimeWithConfig(ctx, rtCfg)

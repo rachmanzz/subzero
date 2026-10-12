@@ -4,7 +4,7 @@
 # ==============================================================================
 
 # Stage 1: Build Binaries
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /src
 
@@ -50,12 +50,12 @@ RUN mkdir -p /tmp /var/subzero && chmod 777 /tmp /var/subzero
 
 EXPOSE 9090
 ENTRYPOINT ["/usr/local/bin/subzero-supervisor"]
-CMD ["-scheme=tcp", "-endpoint=0.0.0.0:9090", "-worker-endpoint=worker:9091", "-spawner=process"]
+CMD ["-scheme=tcp", "-endpoint=0.0.0.0:9090", "-worker-endpoint=127.0.0.1:9091", "-worker-bin=/usr/local/bin/subzero-worker", "-spawner=process"]
 
 # ==============================================================================
 # Target: admin (Management API & Web Dashboard)
 # ==============================================================================
-FROM golang:1.22-alpine AS admin
+FROM golang:1.26-alpine AS admin
 RUN apk --no-cache add ca-certificates tzdata git
 WORKDIR /app
 

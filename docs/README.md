@@ -33,7 +33,7 @@ Welcome to the official technical documentation for **Subzero**, a distributed *
         │                                │   [ Subzero Supervisor ]
         ▼                                │   ┌─────────────────────────────────────┐
 [ Cloud Object Storage ] ◄───────────────┘   │ - Task Dispatcher (v3/worker pattern)│
-(S3 / GCS / MinIO / Local)                   │ - Throttling Semaphore Pool         │
+(S3 / MinIO / Local)                   │ - Throttling Semaphore Pool         │
         ▲                                    │ - Pluggable Transport (IPC/TCP/HTTP)│
         │                                    └──────────────────┬──────────────────┘
         │                                                       │ 4. Warm / Cold Spawn

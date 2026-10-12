@@ -357,3 +357,42 @@ func TestContainerSpawner_TCP_PortMapping(t *testing.T) {
 	}
 	t.Log("✓ TCP container worker executed task and published port successfully")
 }
+
+// TestContainerSpawner_RealDocker_IfAvailable tests actual Docker execution via OSCommandRunner if Docker is running.
+func TestContainerSpawner_RealDocker_IfAvailable(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker binary not found on host, skipping live docker test")
+	}
+
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer checkCancel()
+	if err := exec.CommandContext(checkCtx, "docker", "info").Run(); err != nil {
+		t.Skip("docker daemon not running or accessible, skipping live docker test")
+	}
+
+	// If docker is available, run a containerized worker test using default OSCommandRunner
+	secretKey := []byte("docker-live-test-secret-key-32b!")
+	spawner, err := supervisor.NewContainerSpawner(supervisor.ContainerSpawnerConfig{
+		Engine:        "docker",
+		Image:         "subzero-worker:latest",
+		ContainerName: "subzero-live-worker-test",
+		Scheme:        "tcp",
+		Endpoint:      "127.0.0.1:9095",
+		SecretKey:     secretKey,
+		IdleTimeout:   5 * time.Second,
+		ReadyTimeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewContainerSpawner failed: %v", err)
+	}
+	defer spawner.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := spawner.EnsureRunning(ctx); err != nil {
+		t.Fatalf("EnsureRunning with live docker failed: %v", err)
+	}
+	t.Log("✓ Live docker worker spawned and ready")
+}
+

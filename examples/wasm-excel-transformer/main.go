@@ -21,27 +21,22 @@ func main() {
 
 	var reader io.Reader
 
-	// If sourceURI points to a local file, read directly from filesystem
+	// If sourceURI points to a local file, read directly from mounted filesystem
 	if strings.HasPrefix(sourceURI, "file://") {
 		filePath := strings.TrimPrefix(sourceURI, "file://")
-		f, err := os.Open(filePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[Error] Failed to open source file %s: %v\n", filePath, err)
-			os.Exit(1)
-		}
-		defer f.Close()
-		reader = f
-	} else if sourceURI != "" {
-		// Attempt direct path
-		f, err := os.Open(sourceURI)
-		if err == nil {
+		if f, err := os.Open(filePath); err == nil {
 			defer f.Close()
 			reader = f
-		} else {
-			// Fallback to Stdin
-			reader = os.Stdin
 		}
-	} else {
+	} else if sourceURI != "" && !strings.Contains(sourceURI, "://") {
+		if f, err := os.Open(sourceURI); err == nil {
+			defer f.Close()
+			reader = f
+		}
+	}
+
+	// For S3/MinIO (s3://) or direct pipes, data is streamed directly into Stdin by Subzero runtime
+	if reader == nil {
 		reader = os.Stdin
 	}
 

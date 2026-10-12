@@ -20,7 +20,7 @@ This causes heavy memory consumption, spikes in garbage collection pauses, and p
         │
 3. Client uploads file DIRECTLY
         ▼
-   [ Cloud Object Storage (S3 / MinIO / GCS) ]
+   [ Cloud Object Storage (S3 / MinIO) ]
         ▲
 4. Worker streams bytes DIRECTLY from Storage ◄── [ Subzero Worker ]
 ```
@@ -35,7 +35,7 @@ Located in [`internal/storage/storage.go`](../internal/storage/storage.go):
 
 ```go
 type Driver interface {
-    // Scheme returns the storage scheme identifier (e.g. "s3", "minio", "gcs", "file")
+    // Scheme returns the storage scheme identifier (e.g. "s3", "minio", "file")
     Scheme() string
 
     // GenerateUploadSlot creates a pre-signed upload URL for direct browser/client upload.

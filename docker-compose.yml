@@ -71,7 +71,8 @@ services:
       /usr/local/bin/subzero-supervisor
       -scheme=tcp
       -endpoint=0.0.0.0:9090
-      -worker-endpoint=/tmp/subzero-worker.sock
+      -worker-endpoint=127.0.0.1:9091
+      -worker-bin=/usr/local/bin/subzero-worker
       -spawner=process
       -concurrency=16
       -idle-timeout=15s

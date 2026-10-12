@@ -179,41 +179,34 @@ Transforms incoming tenant documents into standardized canonical format.
 	mainGo := `package main
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
-
-	"github.com/rachmanzz/subzero/pkg/sdk"
+	"io"
+	"os"
 )
 
-// Normalizer implements sdk.Transformer with explicit Receive and Return stages.
-type Normalizer struct {
-	req *sdk.Request
-}
-
-// Receive ingests and validates incoming payload and metadata from Subzero.
-func (n *Normalizer) Receive(ctx context.Context, req *sdk.Request) error {
-	n.req = req
-	if req == nil {
-		return fmt.Errorf("received nil request")
-	}
-	return nil
-}
-
-// Return produces and returns the normalized data and metrics back to Subzero.
-func (n *Normalizer) Return(ctx context.Context) (*sdk.Response, error) {
-	// Execute custom schema transformation logic here
-	processedData := n.req.Payload
-
-	return &sdk.Response{
-		IsSuccess:     true,
-		ProcessedRows: 1,
-		Data:          processedData,
-	}, nil
+// Response defines standard structured output emitted to stdout for Subzero host
+type Response struct {
+	IsSuccess     bool   ` + "`json:\"is_success\"`" + `
+	ProcessedRows int    ` + "`json:\"processed_rows\"`" + `
+	Data          string ` + "`json:\"data,omitempty\"`" + `
 }
 
 func main() {
-	// Execute module via Subzero SDK lifecycle
-	sdk.Run(&Normalizer{})
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read stdin: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Execute custom schema transformation logic here
+	resp := Response{
+		IsSuccess:     true,
+		ProcessedRows: 1,
+		Data:          string(input),
+	}
+
+	_ = json.NewEncoder(os.Stdout).Encode(resp)
 }
 `
 	if err := os.WriteFile(filepath.Join(targetDir, "main.go"), []byte(mainGo), 0644); err != nil {

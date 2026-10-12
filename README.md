@@ -36,7 +36,7 @@ subzero/
 ├── internal/
 │   ├── supervisor/           # Dispatcher engine, throttling semaphore & panic safety
 │   ├── worker/               # Worker coordinator, idle watchdog & auto-termination
-│   └── storage/              # Storage abstraction (Local, S3, MinIO, GCS)
+│   └── storage/              # Storage abstraction (Local, S3, MinIO)
 └── Makefile                  # Build, test, and cleanup scripts
 ```
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -16,6 +17,37 @@ import (
 )
 
 const Scheme = "s3"
+
+func init() {
+	bucket := os.Getenv("SUBZERO_S3_BUCKET")
+	if bucket == "" {
+		bucket = "tenant-vault"
+	}
+	endpoint := os.Getenv("SUBZERO_S3_ENDPOINT")
+	if endpoint == "" {
+		endpoint = os.Getenv("AWS_ENDPOINT_URL_S3")
+	}
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+	accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
+	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	usePathStyle := os.Getenv("SUBZERO_S3_PATH_STYLE") == "true" || endpoint != ""
+
+	d, _ := New(Config{
+		Bucket:       bucket,
+		Region:       region,
+		Endpoint:     endpoint,
+		AccessKey:    accessKey,
+		SecretKey:    secretKey,
+		UsePathStyle: usePathStyle,
+	})
+	if d != nil {
+		storage.Register(d)
+		storage.Register(&minioDriver{Driver: d})
+	}
+}
 
 // Config configures the S3/MinIO storage driver.
 type Config struct {
@@ -72,15 +104,28 @@ func (d *Driver) Scheme() string {
 	return Scheme
 }
 
-func (d *Driver) cleanKey(storageRef string) string {
+func (d *Driver) resolveBucketAndKey(storageRef string) (string, string) {
 	key := storageRef
 	key = strings.TrimPrefix(key, "s3://")
 	key = strings.TrimPrefix(key, "minio://")
-	// If path includes bucket prefix, strip it
-	if strings.HasPrefix(key, d.cfg.Bucket+"/") {
-		key = strings.TrimPrefix(key, d.cfg.Bucket+"/")
+
+	bucket := d.cfg.Bucket
+	if strings.Contains(key, "/") {
+		parts := strings.SplitN(key, "/", 2)
+		if parts[0] != "" && (parts[0] == d.cfg.Bucket || d.cfg.Bucket == "" || d.cfg.Bucket == "tenant-vault") {
+			bucket = parts[0]
+			key = parts[1]
+		}
 	}
-	return strings.TrimPrefix(key, "/")
+	if strings.HasPrefix(key, bucket+"/") {
+		key = strings.TrimPrefix(key, bucket+"/")
+	}
+	return bucket, strings.TrimPrefix(key, "/")
+}
+
+func (d *Driver) cleanKey(storageRef string) string {
+	_, key := d.resolveBucketAndKey(storageRef)
+	return key
 }
 
 // GenerateUploadSlot generates a pre-signed PUT URL using S3 PresignClient.
@@ -90,10 +135,10 @@ func (d *Driver) GenerateUploadSlot(ctx context.Context, storageRef string, ttl 
 		return nil, err
 	}
 
-	key := d.cleanKey(storageRef)
+	bucket, key := d.resolveBucketAndKey(storageRef)
 
 	req, err := d.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(d.cfg.Bucket),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	}, s3.WithPresignExpires(validTTL))
 	if err != nil {
@@ -103,17 +148,17 @@ func (d *Driver) GenerateUploadSlot(ctx context.Context, storageRef string, ttl 
 	return &protocol.UploadSlotResponse{
 		TargetURL:        req.URL,
 		HTTPMethod:       http.MethodPut,
-		StorageReference: fmt.Sprintf("s3://%s/%s", d.cfg.Bucket, key),
+		StorageReference: fmt.Sprintf("s3://%s/%s", bucket, key),
 		ExpiredAt:        time.Now().Add(validTTL),
 	}, nil
 }
 
 // StreamRead streams object bytes directly from S3 without saving to local disk.
 func (d *Driver) StreamRead(ctx context.Context, sourceURI string) (io.ReadCloser, error) {
-	key := d.cleanKey(sourceURI)
+	bucket, key := d.resolveBucketAndKey(sourceURI)
 
 	resp, err := d.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(d.cfg.Bucket),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -125,10 +170,10 @@ func (d *Driver) StreamRead(ctx context.Context, sourceURI string) (io.ReadClose
 
 // PutObject uploads an object stream to S3.
 func (d *Driver) PutObject(ctx context.Context, storageRef string, r io.Reader, size int64) error {
-	key := d.cleanKey(storageRef)
+	bucket, key := d.resolveBucketAndKey(storageRef)
 
 	input := &s3.PutObjectInput{
-		Bucket: aws.String(d.cfg.Bucket),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Body:   r,
 	}
@@ -145,16 +190,26 @@ func (d *Driver) PutObject(ctx context.Context, storageRef string, r io.Reader, 
 
 // DeleteObject deletes an object from S3.
 func (d *Driver) DeleteObject(ctx context.Context, storageRef string) error {
-	key := d.cleanKey(storageRef)
+	bucket, key := d.resolveBucketAndKey(storageRef)
 
 	_, err := d.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(d.cfg.Bucket),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
 		return fmt.Errorf("storage/s3: delete object failed: %w", err)
 	}
 	return nil
+}
+
+// RegisterS3 creates and registers an S3 driver instance with Scheme "s3".
+func RegisterS3(cfg Config) (*Driver, error) {
+	d, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	storage.Register(d)
+	return d, nil
 }
 
 // RegisterMinIO creates and registers an S3 driver instance with Scheme "minio".

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -99,12 +100,27 @@ func main() {
 			}
 		}
 
-		// Native fallback
-		return &protocol.ResultMessage{
-			TaskID:        task.TaskID,
-			IsSuccess:     true,
-			ProcessedRows: 100,
-		}, nil
+		// Allow explicitly recognized built-in probe/testing targets
+		switch task.ActionTarget {
+		case "ping", "ping-test", "benchmark", "health":
+			return &protocol.ResultMessage{
+				TaskID:        task.TaskID,
+				IsSuccess:     true,
+				ProcessedRows: 0,
+			}, nil
+		case "native-parser":
+			return &protocol.ResultMessage{
+				TaskID:        task.TaskID,
+				IsSuccess:     true,
+				ProcessedRows: 100,
+			}, nil
+		default:
+			return &protocol.ResultMessage{
+				TaskID:       task.TaskID,
+				IsSuccess:    false,
+				ErrorMessage: fmt.Sprintf("worker: action target %q not found or could not be resolved as Wasm module", task.ActionTarget),
+			}, fmt.Errorf("worker: unknown action target %q", task.ActionTarget)
+		}
 	})
 	defer w.Close()
 

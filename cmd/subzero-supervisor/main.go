@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -62,8 +63,17 @@ func main() {
 			ReadyTimeout: 5 * time.Second,
 		})
 	} else {
+		binPath := *workerBin
+		if _, err := os.Stat(binPath); err != nil {
+			if _, err2 := os.Stat("/usr/local/bin/subzero-worker"); err2 == nil {
+				binPath = "/usr/local/bin/subzero-worker"
+			} else if lp, err3 := exec.LookPath("subzero-worker"); err3 == nil {
+				binPath = lp
+			}
+		}
+
 		spawner, err = supervisor.NewProcessSpawner(supervisor.SpawnerConfig{
-			WorkerBinary: *workerBin,
+			WorkerBinary: binPath,
 			Scheme:       *scheme,
 			Endpoint:     *workerEndpoint,
 			SecretKey:    []byte(*secretKey),
