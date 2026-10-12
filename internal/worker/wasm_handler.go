@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rachmanzz/subzero/internal/runtime/wasm"
 	"github.com/rachmanzz/subzero/pkg/protocol"
@@ -55,15 +57,33 @@ func NewWasmHandler(engine *wasm.Engine, resolver WasmModuleResolver) HandlerFun
 			env["SUBZERO_CFG_"+strings.ToUpper(k)] = v
 		}
 
-		execRes, err := engine.Execute(ctx, wasmBytes, wasm.ExecOptions{
-			Env: env,
-		})
+		var execOpts wasm.ExecOptions
+		execOpts.Env = env
+
+		if tStr, ok := task.CustomConfig["timeout_ms"]; ok {
+			if ms, err := strconv.Atoi(tStr); err == nil && ms > 0 {
+				execOpts.Timeout = time.Duration(ms) * time.Millisecond
+			}
+		}
+
+		if fStr, ok := task.CustomConfig["fuel_limit"]; ok {
+			if fl, err := strconv.ParseUint(fStr, 10, 64); err == nil {
+				execOpts.FuelLimit = fl
+			}
+		}
+
+		execRes, err := engine.Execute(ctx, wasmBytes, execOpts)
+		var execDuration string
+		if execRes != nil {
+			execDuration = execRes.Duration.String()
+		}
+
 		if err != nil {
 			return &protocol.ResultMessage{
 				TaskID:        task.TaskID,
 				IsSuccess:     false,
 				ErrorMessage:  fmt.Sprintf("wasm execution failed: %v", err),
-				ExecutionTime: execRes.Duration.String(),
+				ExecutionTime: execDuration,
 			}, nil
 		}
 
@@ -71,7 +91,7 @@ func NewWasmHandler(engine *wasm.Engine, resolver WasmModuleResolver) HandlerFun
 			TaskID:        task.TaskID,
 			IsSuccess:     true,
 			ErrorMessage:  execRes.Stderr,
-			ExecutionTime: execRes.Duration.String(),
+			ExecutionTime: execDuration,
 		}, nil
 	}
 }

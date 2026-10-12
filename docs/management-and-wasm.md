@@ -128,5 +128,27 @@ The dashboard UI ([`pkg/management/ui/dashboard.html`](../pkg/management/ui/dash
   * Live status counters (Modules, Compiler Adapter, Scale-to-Zero status).
   * 5-Stage visual pipeline indicator: Safe Unpack ➔ Structure Check ➔ AST Security Audit ➔ Native Build ➔ Publish.
   * Drag-and-drop `.tar.gz` and `.go` upload with detailed audit and compilation logs.
-  * Security status badges (`🛡️ Verified Safe` vs `⛔ Rejected`) with violation breakdown.
   * Interactive module management table with download and delete capabilities.
+
+---
+
+## 6. WebAssembly Sandboxing, Resource Quotas & Fuel Metering
+
+Subzero enforces strict multi-tenant resource quotas within the Wazero execution engine ([`internal/runtime/wasm/engine.go`](../internal/runtime/wasm/engine.go)) to prevent tenant code from consuming excessive memory or locking CPU threads:
+
+### Resource Controls
+
+1. **Linear Memory Page Quotas (`MemoryLimitPages`)**
+   * Configures hard bounds on Wasm linear memory (each page is 64 KB). Default: `512` pages (32 MB).
+   * Over-allocation attempts immediately trap with `ErrMemoryLimitExceeded`.
+2. **CPU Preemption & Timeout Watchdog (`WithCloseOnContextDone`)**
+   * Wazero inserts check instructions into generated machine code loops and function entries.
+   * If tenant code enters an infinite loop (`for {}`), it is interrupted and terminated with exit code `124` (`ErrExecutionTimeout`), preventing host thread starvation.
+3. **Deterministic Fuel / Operation Metering (`FuelLimit`)**
+   * When `FuelLimit > 0` is set, a compilation listener tracks guest function calls.
+   * If the allotted operations budget is depleted, the module is forcibly halted with exit code `137` (`ErrFuelExhausted`).
+4. **Task Configuration Pass-Through**
+   * Tasks can pass execution constraints via `CustomConfig`:
+     * `timeout_ms`: Sets the per-task execution timeout (e.g., `"1000"` for 1s).
+     * `fuel_limit`: Sets the operation/fuel quota (e.g., `"500000"`).
+
