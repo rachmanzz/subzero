@@ -2,6 +2,8 @@ package management
 
 import (
 	"time"
+
+	"github.com/rachmanzz/subzero/pkg/permission"
 )
 
 // WasmModule represents a compiled WebAssembly artifact stored in Subzero.
@@ -39,4 +41,20 @@ type CompileResult struct {
 	CompilerLog string        `json:"compiler_log"`
 	Audit       *AuditReport  `json:"audit,omitempty"`
 	WasmBytes   []byte        `json:"-"`
+}
+
+// InspectPolicyRequest defines the payload for testing module capability against a worker policy (PRD 5.5).
+type InspectPolicyRequest struct {
+	ModuleRequest *permission.ModuleRequest `json:"module_request,omitempty"`
+	WorkerPolicy  *permission.WorkerPolicy  `json:"worker_policy,omitempty"`
+}
+
+// InspectPolicyResponse provides the evaluation outcome of two-sided capability negotiation (PRD 5.5).
+type InspectPolicyResponse struct {
+	ModuleID             string                           `json:"module_id,omitempty"`
+	TenantID             string                           `json:"tenant_id,omitempty"`
+	Allowed              bool                             `json:"allowed"`
+	EffectivePermissions *permission.EffectivePermissions `json:"effective_permissions,omitempty"`
+	RequestedPermissions *permission.ModuleRequest        `json:"requested_permissions,omitempty"`
+	Error                string                           `json:"error,omitempty"`
 }

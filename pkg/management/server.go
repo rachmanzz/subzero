@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rachmanzz/subzero/pkg/management/ui"
+	"github.com/rachmanzz/subzero/pkg/permission"
 )
 
 // ServerConfig configures the Subzero management API & dashboard.
@@ -66,11 +67,13 @@ func (s *Server) setupRoutes() {
 	// API endpoints
 	r.Route("/api", func(api chi.Router) {
 		api.Get("/status", s.handleStatus)
+		api.Post("/inspect-policy", s.handleInspectPolicyDirect)
 
 		api.Route("/modules", func(mr chi.Router) {
 			mr.Get("/", s.handleListModules)
 			mr.Post("/compile", s.handleCompileModule)
 			mr.Get("/{id}/download", s.handleDownloadWasm)
+			mr.Post("/{id}/inspect-policy", s.handleInspectModulePolicy)
 			mr.Delete("/{id}", s.handleDeleteModule)
 		})
 	})
@@ -304,4 +307,73 @@ func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleInspectPolicyDirect(w http.ResponseWriter, r *http.Request) {
+	var req InspectPolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	workerPolicy := req.WorkerPolicy
+	if workerPolicy == nil {
+		defPolicy := permission.DefaultWorkerPolicy()
+		workerPolicy = &defPolicy
+	}
+
+	eff, err := permission.Evaluate(workerPolicy, req.ModuleRequest)
+	resp := InspectPolicyResponse{
+		Allowed:              err == nil,
+		RequestedPermissions: req.ModuleRequest,
+		EffectivePermissions: eff,
+	}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) handleInspectModulePolicy(w http.ResponseWriter, r *http.Request) {
+	moduleID := chi.URLParam(r, "id")
+	mod, err := s.cfg.Store.Get(r.Context(), moduleID)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "wasm module not found"})
+		return
+	}
+
+	var req InspectPolicyRequest
+	if r.Body != nil && r.ContentLength > 0 {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	workerPolicy := req.WorkerPolicy
+	if workerPolicy == nil {
+		defPolicy := permission.DefaultWorkerPolicy()
+		workerPolicy = &defPolicy
+	}
+
+	moduleReq := req.ModuleRequest
+	if moduleReq == nil && mod.Config != nil && mod.Config.Permissions != nil {
+		moduleReq = mod.Config.Permissions
+	}
+
+	eff, err := permission.Evaluate(workerPolicy, moduleReq)
+	resp := InspectPolicyResponse{
+		ModuleID:             moduleID,
+		TenantID:             mod.TenantID,
+		Allowed:              err == nil,
+		RequestedPermissions: moduleReq,
+		EffectivePermissions: eff,
+	}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }

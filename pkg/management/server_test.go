@@ -2,6 +2,7 @@ package management_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/rachmanzz/subzero/pkg/management"
+	"github.com/rachmanzz/subzero/pkg/permission"
 )
 
 func TestManagementServerE2E(t *testing.T) {
@@ -361,6 +363,146 @@ func TestManagementServer_StructureReject(t *testing.T) {
 
 	if w2.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for direct .go upload, got %d", w2.Code)
+	}
+}
+
+func TestManagementServer_InspectPolicyDirect(t *testing.T) {
+	srv, err := management.NewServer(management.ServerConfig{})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+	r := srv.Routes()
+
+	// 1. Valid request within policy
+	policy := permission.DefaultWorkerPolicy()
+	policy.AllowedHostCalls = []string{"storage:get_object", "logger:info"}
+	policy.S3.AllowedPrefixes = []string{"s3://vault-alpha/"}
+
+	reqPayload := management.InspectPolicyRequest{
+		WorkerPolicy: &policy,
+		ModuleRequest: &permission.ModuleRequest{
+			HostCalls: []string{"storage:get_object"},
+			S3: permission.RequestS3{
+				AllowedPrefixes: []string{"s3://vault-alpha/2026/"},
+			},
+		},
+	}
+
+	bodyBytes, _ := json.Marshal(reqPayload)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/inspect-policy", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp management.InspectPolicyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+
+	if !resp.Allowed {
+		t.Fatalf("expected allowed true, got false, error: %s", resp.Error)
+	}
+	if !resp.EffectivePermissions.HostCalls["storage:get_object"] {
+		t.Errorf("expected storage:get_object in effective host calls")
+	}
+
+	// 2. Privilege Escalation Request (Unauthorized host call)
+	escalatedPayload := management.InspectPolicyRequest{
+		WorkerPolicy: &policy,
+		ModuleRequest: &permission.ModuleRequest{
+			HostCalls: []string{"unauthorized:kernel_exec"},
+		},
+	}
+	bodyBytes, _ = json.Marshal(escalatedPayload)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/inspect-policy", bytes.NewReader(bodyBytes))
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", w.Code)
+	}
+
+	var escResp management.InspectPolicyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &escResp); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+
+	if escResp.Allowed {
+		t.Errorf("expected privilege escalation to be rejected (allowed=false)")
+	}
+	if escResp.Error == "" {
+		t.Errorf("expected error message describing violation")
+	}
+}
+
+func TestManagementServer_InspectModulePolicy(t *testing.T) {
+	tmpDir := t.TempDir()
+	store, err := management.NewFileStore(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := management.NewServer(management.ServerConfig{Store: store})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+	r := srv.Routes()
+
+	// Save a module with declared permissions in config.zero
+	mod := &management.WasmModule{
+		ID:       "mod-inspect-1",
+		TenantID: "tenant-beta",
+		Name:     "beta-parser",
+		Config: &management.ConfigZero{
+			Permissions: &permission.ModuleRequest{
+				HostCalls: []string{"storage:get_object"},
+			},
+		},
+	}
+	if err := store.Save(context.Background(), mod, []byte{0x00, 0x61, 0x73, 0x6d}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inspect existing module policy against strict policy
+	policy := permission.DefaultWorkerPolicy()
+	policy.AllowedHostCalls = []string{"storage:get_object"}
+
+	bodyBytes, _ := json.Marshal(management.InspectPolicyRequest{
+		WorkerPolicy: &policy,
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/modules/mod-inspect-1/inspect-policy", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp management.InspectPolicyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if !resp.Allowed {
+		t.Fatalf("expected allowed true, got false: %s", resp.Error)
+	}
+	if resp.ModuleID != "mod-inspect-1" || resp.TenantID != "tenant-beta" {
+		t.Errorf("unexpected module or tenant ID in response: %+v", resp)
+	}
+
+	// Test nonexistent module returns 404
+	w404 := httptest.NewRecorder()
+	req404 := httptest.NewRequest(http.MethodPost, "/api/modules/nonexistent-mod/inspect-policy", nil)
+	r.ServeHTTP(w404, req404)
+
+	if w404.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for nonexistent module, got %d", w404.Code)
 	}
 }
 
