@@ -164,15 +164,41 @@ Transforms incoming tenant documents into standardized canonical format.
 	mainGo := `package main
 
 import (
+	"context"
 	"fmt"
-	"os"
+
+	"github.com/rachmanzz/subzero/pkg/sdk"
 )
 
+// Normalizer implements sdk.Transformer with explicit Receive and Return stages.
+type Normalizer struct {
+	req *sdk.Request
+}
+
+// Receive ingests and validates incoming payload and metadata from Subzero.
+func (n *Normalizer) Receive(ctx context.Context, req *sdk.Request) error {
+	n.req = req
+	if req == nil {
+		return fmt.Errorf("received nil request")
+	}
+	return nil
+}
+
+// Return produces and returns the normalized data and metrics back to Subzero.
+func (n *Normalizer) Return(ctx context.Context) (*sdk.Response, error) {
+	// Execute custom schema transformation logic here
+	processedData := n.req.Payload
+
+	return &sdk.Response{
+		IsSuccess:     true,
+		ProcessedRows: 1,
+		Data:          processedData,
+	}, nil
+}
+
 func main() {
-	// Subzero Wasm Entrypoint
-	taskID := os.Getenv("SUBZERO_TASK_ID")
-	tenantID := os.Getenv("SUBZERO_TENANT_ID")
-	fmt.Fprintf(os.Stderr, "Processing task %s for tenant %s\n", taskID, tenantID)
+	// Execute module via Subzero SDK lifecycle
+	sdk.Run(&Normalizer{})
 }
 `
 	if err := os.WriteFile(filepath.Join(targetDir, "main.go"), []byte(mainGo), 0644); err != nil {

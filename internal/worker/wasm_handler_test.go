@@ -18,10 +18,9 @@ func TestWorkerWasmHandlerExecution(t *testing.T) {
 	goSource := `package main
 import (
 	"fmt"
-	"os"
 )
 func main() {
-	fmt.Printf("Task %s completed for %s\n", os.Getenv("SUBZERO_TASK_ID"), os.Getenv("SUBZERO_TENANT_ID"))
+	fmt.Println("{\"is_success\":true,\"processed_rows\":250}")
 }
 `
 	compiler := management.NewGoCompiler("")
@@ -66,7 +65,7 @@ func main() {
 		t.Fatalf("handler returned unexpected error: %v", err)
 	}
 
-	if !result.IsSuccess || result.TaskID != task.TaskID {
+	if !result.IsSuccess || result.TaskID != task.TaskID || result.ProcessedRows != 250 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 }

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/rachmanzz/subzero/internal/runtime/wasm"
 	"github.com/rachmanzz/subzero/pkg/protocol"
+	"github.com/rachmanzz/subzero/pkg/sdk"
 )
 
 var (
@@ -83,6 +85,23 @@ func NewWasmHandler(engine *wasm.Engine, resolver WasmModuleResolver) HandlerFun
 				TaskID:        task.TaskID,
 				IsSuccess:     false,
 				ErrorMessage:  fmt.Sprintf("wasm execution failed: %v", err),
+				ExecutionTime: execDuration,
+			}, nil
+		}
+
+		// Parse structured sdk.Response if emitted by guest module
+		var sdkResp sdk.Response
+		trimmedStdout := strings.TrimSpace(execRes.Stdout)
+		if strings.HasPrefix(trimmedStdout, "{") && json.Unmarshal([]byte(trimmedStdout), &sdkResp) == nil {
+			errMsg := sdkResp.ErrorMessage
+			if errMsg == "" {
+				errMsg = execRes.Stderr
+			}
+			return &protocol.ResultMessage{
+				TaskID:        task.TaskID,
+				IsSuccess:     sdkResp.IsSuccess,
+				ProcessedRows: int64(sdkResp.ProcessedRows),
+				ErrorMessage:  errMsg,
 				ExecutionTime: execDuration,
 			}, nil
 		}

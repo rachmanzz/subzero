@@ -130,7 +130,129 @@ Modul dapat mengimpor library pihak ketiga dengan syarat:
 
 ---
 
-## 6. Model Keamanan & Audit Statis AST
+## 6. Kontrak Antarmuka Pemrosesan (Subzero Go SDK)
+
+Untuk mempermudah pembuatan modul dan memastikan pemrosesan data terstandarisasi, Subzero menyediakan pustaka resmi **`pkg/sdk`** (`github.com/rachmanzz/subzero/pkg/sdk`).
+
+### A. Pola Dua Tahap: `Receive` dan `Return`
+
+Setiap modul transformasi mengimplementasikan interface `sdk.Transformer`:
+
+```go
+type Transformer interface {
+    // Receive menerima dan memvalidasi request metadata & payload mentah dari host Subzero.
+    Receive(ctx context.Context, req *sdk.Request) error
+
+    // Return memproses data dan mengembalikan hasil normalisasi serta metrik jumlah baris ke Subzero.
+    Return(ctx context.Context) (*sdk.Response, error)
+}
+```
+
+#### Struktur Data `sdk.Request` (Input)
+```go
+type Request struct {
+    TaskID       string            // ID unik penugasan
+    TenantID     string            // Identitas tenant
+    ActionTarget string            // Target aksi (misal: "normalize", "parse")
+    SourceURI    string            // URI berkas sumber (S3 / lokal) jika ada
+    CustomConfig map[string]string // Konfigurasi dinamis dari SUBZERO_CFG_*
+    Payload      []byte            // Byte data mentah (CSV, JSON, teks)
+}
+```
+
+#### Struktur Data `sdk.Response` (Output)
+```go
+type Response struct {
+    IsSuccess     bool              // Status keberhasilan eksekusi
+    ProcessedRows int               // Metrik jumlah baris valid yang berhasil diproses
+    Data          []byte            // Byte data hasil normalisasi (CSV/JSON kanonikal)
+    OutputURI     string            // URI berkas tujuan jika ditulis langsung
+    Metadata      map[string]string // Metadata tambahan (misal: delimiter, encoding)
+    ErrorMessage  string            // Pesan error jika transformasi gagal
+}
+```
+
+### B. Contoh Implementasi Lengkap `main.go`
+
+```go
+package main
+
+import (
+    "bytes"
+    "context"
+    "encoding/csv"
+    "fmt"
+    "io"
+
+    "github.com/rachmanzz/subzero/pkg/sdk"
+)
+
+type StatementNormalizer struct {
+    req  *sdk.Request
+    rows [][]string
+}
+
+// 1. Receive: Menerima data dan memvalidasi payload
+func (n *StatementNormalizer) Receive(ctx context.Context, req *sdk.Request) error {
+    if len(req.Payload) == 0 {
+        return fmt.Errorf("payload kosong")
+    }
+    n.req = req
+
+    r := csv.NewReader(bytes.NewReader(req.Payload))
+    for {
+        record, err := r.Read()
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            return fmt.Errorf("gagal parsing baris CSV: %w", err)
+        }
+        n.rows = append(n.rows, record)
+    }
+    return nil
+}
+
+// 2. Return: Mengembalikan data kanonikal dan metrik baris
+func (n *StatementNormalizer) Return(ctx context.Context) (*sdk.Response, error) {
+    var outBuf bytes.Buffer
+    w := csv.NewWriter(&outBuf)
+
+    // Tulis header standar kanonikal Subzero
+    _ = w.Write([]string{"tenant_id", "row_index", "raw_content"})
+
+    for i, row := range n.rows {
+        _ = w.Write([]string{n.req.TenantID, fmt.Sprintf("%d", i+1), fmt.Sprintf("%v", row)})
+    }
+    w.Flush()
+
+    return &sdk.Response{
+        IsSuccess:     true,
+        ProcessedRows: len(n.rows),
+        Data:          outBuf.Bytes(),
+        Metadata: map[string]string{
+            "schema_version": "v1.0",
+        },
+    }, nil
+}
+
+func main() {
+    // Jalankan transformer via Subzero SDK runtime
+    sdk.Run(&StatementNormalizer{})
+}
+```
+
+> **Alternatif Fungsional:** Anda juga dapat menggunakan handler fungsional satu baris:
+> ```go
+> sdk.Handle(func(ctx context.Context, req *sdk.Request) (*sdk.Response, error) {
+>     // Logika transformasi singkat
+>     return &sdk.Response{IsSuccess: true, ProcessedRows: 1, Data: req.Payload}, nil
+> })
+> ```
+
+---
+
+## 7. Model Keamanan & Audit Statis AST
 
 Sebelum masuk ke tahap kompilasi, Subzero menjalankan pemindaian AST (*Abstract Syntax Tree Static Analysis*) untuk mendeteksi vektor serangan dan celah keamanan:
 
@@ -153,7 +275,7 @@ Sebelum masuk ke tahap kompilasi, Subzero menjalankan pemindaian AST (*Abstract 
 
 ---
 
-## 7. Matriks Penolakan Sistem (*Rejection Policy*)
+## 8. Matriks Penolakan Sistem (*Rejection Policy*)
 
 | Pelanggaran | Status HTTP | Response Payload |
 | :--- | :--- | :--- |
@@ -165,7 +287,7 @@ Sebelum masuk ke tahap kompilasi, Subzero menjalankan pemindaian AST (*Abstract 
 
 ---
 
-## 8. Alur Kerja Pengembang via `subzero-cli`
+## 9. Alur Kerja Pengembang via `subzero-cli`
 
 Subzero menyediakan perangkat CLI terpadu untuk mempermudah siklus pengembangan:
 
