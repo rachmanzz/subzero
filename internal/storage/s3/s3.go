@@ -85,12 +85,17 @@ func (d *Driver) cleanKey(storageRef string) string {
 
 // GenerateUploadSlot generates a pre-signed PUT URL using S3 PresignClient.
 func (d *Driver) GenerateUploadSlot(ctx context.Context, storageRef string, ttl time.Duration) (*protocol.UploadSlotResponse, error) {
+	validTTL, err := storage.ValidateEphemeralTTL(ttl)
+	if err != nil {
+		return nil, err
+	}
+
 	key := d.cleanKey(storageRef)
 
 	req, err := d.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(d.cfg.Bucket),
 		Key:    aws.String(key),
-	}, s3.WithPresignExpires(ttl))
+	}, s3.WithPresignExpires(validTTL))
 	if err != nil {
 		return nil, fmt.Errorf("storage/s3: presign put object failed: %w", err)
 	}
@@ -99,7 +104,7 @@ func (d *Driver) GenerateUploadSlot(ctx context.Context, storageRef string, ttl 
 		TargetURL:        req.URL,
 		HTTPMethod:       http.MethodPut,
 		StorageReference: fmt.Sprintf("s3://%s/%s", d.cfg.Bucket, key),
-		ExpiredAt:        time.Now().Add(ttl),
+		ExpiredAt:        time.Now().Add(validTTL),
 	}, nil
 }
 

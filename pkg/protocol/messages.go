@@ -30,3 +30,8 @@ type UploadSlotResponse struct {
 	StorageReference string            `json:"storage_reference"`
 	ExpiredAt        time.Time         `json:"expired_at"`
 }
+
+// IsExpired reports whether the upload slot has expired (PRD 7).
+func (u *UploadSlotResponse) IsExpired() bool {
+	return !u.ExpiredAt.IsZero() && time.Now().After(u.ExpiredAt)
+}

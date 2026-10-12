@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +11,31 @@ import (
 
 	"github.com/rachmanzz/subzero/pkg/protocol"
 )
+
+const (
+	// MaxEphemeralTTL defines the maximum allowed duration for pre-signed credentials (PRD 7: max 15 minutes).
+	MaxEphemeralTTL = 15 * time.Minute
+	// DefaultEphemeralTTL is the standard lifetime when unspecified or <= 0.
+	DefaultEphemeralTTL = 15 * time.Minute
+)
+
+var (
+	// ErrTTLExceeded is returned when a requested pre-signed TTL exceeds the 15-minute security limit.
+	ErrTTLExceeded = errors.New("storage: presigned credential ttl exceeds maximum limit of 15 minutes (PRD 7)")
+	// ErrSlotExpired is returned when attempting to access an expired upload slot or reference.
+	ErrSlotExpired = errors.New("storage: presigned upload slot has expired (PRD 7)")
+)
+
+// ValidateEphemeralTTL validates and normalizes pre-signed credential TTL against PRD 7 (max 15 minutes).
+func ValidateEphemeralTTL(ttl time.Duration) (time.Duration, error) {
+	if ttl <= 0 {
+		return DefaultEphemeralTTL, nil
+	}
+	if ttl > MaxEphemeralTTL {
+		return 0, fmt.Errorf("%w: requested %v, maximum allowed %v", ErrTTLExceeded, ttl, MaxEphemeralTTL)
+	}
+	return ttl, nil
+}
 
 // Driver defines the common contract for object storage providers (AWS S3, MinIO, GCS, Local).
 type Driver interface {

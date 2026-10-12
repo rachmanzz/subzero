@@ -46,6 +46,11 @@ func (d *Driver) resolvePath(storageRef string) string {
 
 // GenerateUploadSlot returns an upload slot representation for the local target.
 func (d *Driver) GenerateUploadSlot(ctx context.Context, storageRef string, ttl time.Duration) (*protocol.UploadSlotResponse, error) {
+	validTTL, err := storage.ValidateEphemeralTTL(ttl)
+	if err != nil {
+		return nil, err
+	}
+
 	targetPath := d.resolvePath(storageRef)
 	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -56,7 +61,7 @@ func (d *Driver) GenerateUploadSlot(ctx context.Context, storageRef string, ttl 
 		TargetURL:        fmt.Sprintf("file://%s", targetPath),
 		HTTPMethod:       http.MethodPut,
 		StorageReference: storageRef,
-		ExpiredAt:        time.Now().Add(ttl),
+		ExpiredAt:        time.Now().Add(validTTL),
 	}, nil
 }
 
