@@ -1,0 +1,72 @@
+Subzero
+Copyright (c) 2026 Muhammad Abdurrahman
+
+This product is licensed under the GNU Affero General Public License
+version 3.0 (AGPL-3.0). The full license text is in the file LICENSE
+and is also available at <https://www.gnu.org/licenses/agpl-3.0.txt>.
+
+--------------------------------------------------------------------------------
+Copyright holders and ownership
+--------------------------------------------------------------------------------
+
+Copyright (c) 2026 Muhammad Abdurrahman
+Individual contributions are the property of their respective authors, who
+retain full copyright in their own work. A list of contributors is
+maintained in the repository history and in CONTRIBUTORS.md when present.
+
+--------------------------------------------------------------------------------
+The copyright holder is not bound by this license
+--------------------------------------------------------------------------------
+
+The AGPL-3.0 places its obligations on recipients of the software. It does
+not place obligations on the copyright holder. Muhammad Abdurrahman is
+therefore free to:
+
+  - use, modify, and run the software privately without restriction;
+  - redistribute it under AGPL-3.0, as already done for this repository;
+  - relicense the work, or any portion of it, under SSPL-1.0;
+  - relicense the work, or any portion of it, under a proprietary
+    commercial license;
+  - offer support, service level agreements, and other paid services in
+    addition to the license itself.
+
+Nothing in the license, in this notice, or in any other file in this
+repository limits these rights. See LICENSING.md for the full dual
+licensing policy.
+
+--------------------------------------------------------------------------------
+Scope of the rights reserved above
+--------------------------------------------------------------------------------
+
+The rights reserved above apply to the original work authored for this
+project. They do not, and cannot, extend to:
+
+  - third-party components, each of which is governed by its own license;
+  - obligations already accepted in writing by the copyright holder in a
+    separate agreement, such as an enterprise service level agreement or a
+    commercial license;
+  - rights in material that was already published under AGPL-3.0, which
+    cannot be withdrawn or relicensed because those rights have already
+    been granted irrevocably to recipients.
+
+--------------------------------------------------------------------------------
+Attribution requirement
+--------------------------------------------------------------------------------
+
+Recipients of this software must preserve this notice, and the copyright
+and license notices of the original author, in every copy of the work. The
+AGPL-3.0 sections 4, 5, and 6 make removal of those notices a violation of
+the license. The recommended machine-readable identifier for source files
+is:
+
+    SPDX-License-Identifier: AGPL-3.0-only
+
+--------------------------------------------------------------------------------
+Commercial licensing
+--------------------------------------------------------------------------------
+
+As of the date of this notice, no commercial licensing mechanism exists for
+this project. All code in this repository is licensed under AGPL-3.0 and
+nothing else. SSPL-1.0 is documented in LICENSE-SSPL-1.0.txt as the
+intended option should a commercial offering become necessary in the
+future. See LICENSING.md.

@@ -1,7 +1,7 @@
 # Subzero
 
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go)](https://golang.org)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL_3.0-blue.svg)](LICENSE)
 
 **Subzero** is a distributed, sandboxed runtime engine built on a *scale-to-zero* computing architecture. It acts as an on-demand workload execution bridge for tenant data parsing and transformations (e.g., massive spreadsheet processing), minimizing idle resources while ensuring strict memory isolation and blast-radius containment.
 
@@ -76,4 +76,9 @@ Notice the sub-millisecond response time and observe the worker auto-terminating
 ---
 
 ## 📄 License
-This project is licensed under the MIT License.
+
+This project is **dual licensed**. The default license currently in effect for all code in this repository is the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+
+- **Default License**: [GNU AGPL-3.0](LICENSE)
+- **Copyright & Reserved Rights**: [NOTICE](NOTICE)
+- **Dual Licensing Policy & Commercial Option (SSPL-1.0)**: [LICENSING.md](LICENSING.md)
