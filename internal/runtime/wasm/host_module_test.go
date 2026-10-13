@@ -75,6 +75,7 @@ func callMetric(name string, v float64) {
 	}
 
 	hostCtx := &wasm.HostContext{
+		TenantID:    "tenant-alpha",
 		Permissions: perms,
 		LogHandler: func(level int, msg string) {
 			loggedMessages = append(loggedMessages, msg)
@@ -99,8 +100,10 @@ func callMetric(name string, v float64) {
 		t.Errorf("unexpected logged message: %v", loggedMessages[0])
 	}
 
-	if val, ok := recordedMetrics["custom_metric"]; !ok || val != 42.5 {
-		t.Errorf("expected metric 'custom_metric' = 42.5, got %v", val)
+	// Verify metric is recorded with proper tenant namespace
+	expectedMetricName := "tenant.tenant-alpha.custom_metric"
+	if val, ok := recordedMetrics[expectedMetricName]; !ok || val != 42.5 {
+		t.Errorf("expected namespaced metric %q = 42.5, got map: %+v", expectedMetricName, recordedMetrics)
 	}
 }
 
@@ -121,6 +124,9 @@ func hostLog(level uint32, msgPtr, msgLen uint32) uint32
 //go:wasmimport subzero_host host_storage_get
 func hostStorageGet(keyPtr, keyLen, outPtr, outMaxLen, outReadPtr uint32) uint32
 
+//go:wasmimport subzero_host host_storage_put
+func hostStoragePut(keyPtr, keyLen, valPtr, valLen uint32) uint32
+
 //go:wasmimport subzero_host host_metrics_record
 func hostMetricsRecord(namePtr, nameLen uint32, val float64) uint32
 
@@ -139,10 +145,16 @@ func main() {
 		os.Exit(102) // Expected permission denied code 1
 	}
 
+	val := []byte("val")
+	vptr := uint32(uintptr(unsafe.Pointer(&val[0])))
+	if code := hostStoragePut(kptr, uint32(len(key)), vptr, uint32(len(val))); code != 1 {
+		os.Exit(103) // Expected permission denied code 1
+	}
+
 	mName := []byte("unauthorized_metric")
 	mptr := uint32(uintptr(unsafe.Pointer(&mName[0])))
 	if code := hostMetricsRecord(mptr, uint32(len(mName)), 1.0); code != 1 {
-		os.Exit(103) // Expected permission denied code 1
+		os.Exit(104) // Expected permission denied code 1
 	}
 }
 `

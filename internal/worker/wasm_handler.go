@@ -110,14 +110,7 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 
 		// 3. Enforce S3 prefix policy on task.SourceURI
 		if task.SourceURI != "" && strings.HasPrefix(task.SourceURI, "s3://") {
-			allowed := false
-			for _, prefix := range effective.S3.AllowedPrefixes {
-				if prefix == "*" || prefix == "s3://" || strings.HasPrefix(task.SourceURI, prefix) {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
+			if !permission.IsS3PrefixAllowed(task.SourceURI, effective.S3.AllowedPrefixes) {
 				return &protocol.ResultMessage{
 					TaskID:       task.TaskID,
 					IsSuccess:    false,
@@ -260,6 +253,7 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 
 		// Attach HostContext with effective permissions and callbacks
 		hostCtx := &wasm.HostContext{
+			TenantID:      task.TenantID,
 			Permissions:   effective,
 			StorageGet:    storageGet,
 			StoragePut:    storagePut,

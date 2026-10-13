@@ -15,6 +15,7 @@ type hostContextKey struct{}
 
 // HostContext defines the active permissions and host callbacks for a Wasm invocation.
 type HostContext struct {
+	TenantID      string
 	Permissions   *permission.EffectivePermissions
 	StorageGet    func(ctx context.Context, key string) ([]byte, error)
 	StoragePut    func(ctx context.Context, key string, data []byte) error
@@ -174,8 +175,26 @@ func RegisterHostModule(ctx context.Context, rt wazero.Runtime) error {
 				return 4
 			}
 
+			rawName := strings.TrimSpace(string(nameBytes))
+			if rawName == "" || len(rawName) > 128 {
+				return 4 // Invalid metric name length
+			}
+
+			// Validate allowed metric name characters [a-zA-Z0-9_.-]
+			for _, ch := range rawName {
+				if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '-') {
+					return 4 // Forbidden character in metric name
+				}
+			}
+
+			// Enforce tenant namespace to prevent cross-tenant collision / cardinality explosion
+			metricName := rawName
+			if hc != nil && hc.TenantID != "" && !strings.HasPrefix(rawName, "tenant."+hc.TenantID+".") {
+				metricName = fmt.Sprintf("tenant.%s.%s", hc.TenantID, rawName)
+			}
+
 			if hc.MetricHandler != nil {
-				hc.MetricHandler(string(nameBytes), val)
+				hc.MetricHandler(metricName, val)
 			}
 			return 0
 		}).
