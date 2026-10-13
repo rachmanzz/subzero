@@ -11,7 +11,7 @@
 
 The Subzero team takes security issues seriously. If you discover a security vulnerability in Subzero, please report it privately:
 
-1. **Email**: Send details to `security@subzero.dev` (or create a private GitHub Security Advisory).
+1. **GitHub Security Advisory**: Report privately via [GitHub Security Advisories](https://github.com/rachmanzz/subzero/security/advisories/new).
 2. **Details to include**:
    - Description of the vulnerability and affected component (Supervisor, Worker, Wasm runtime, Management API, Transport layer).
    - Minimal proof of concept (PoC) code or steps to reproduce.
