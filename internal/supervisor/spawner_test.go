@@ -162,4 +162,3 @@ func TestProcessSpawner_WithCustomPolicy(t *testing.T) {
 		t.Fatalf("expected state RUNNING, got %s", spawner.State())
 	}
 }
-

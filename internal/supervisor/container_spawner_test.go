@@ -45,11 +45,11 @@ func (m *mockCommandProcess) Kill() error {
 
 // mockCommandRunner records CLI commands and returns mock processes.
 type mockCommandRunner struct {
-	mu           sync.Mutex
-	startedCmds  [][]string
-	runCmds      [][]string
-	onStart      func(name string, args ...string) (supervisor.CommandProcess, error)
-	customProc   *mockCommandProcess
+	mu          sync.Mutex
+	startedCmds [][]string
+	runCmds     [][]string
+	onStart     func(name string, args ...string) (supervisor.CommandProcess, error)
+	customProc  *mockCommandProcess
 }
 
 func (m *mockCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {

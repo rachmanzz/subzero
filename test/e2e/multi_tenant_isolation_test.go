@@ -18,10 +18,10 @@ import (
 )
 
 // TestMultiTenant_StorageAndSandboxIsolation verifies that:
-// 1. Tenant Alpha and Tenant Bravo have strictly isolated storage policies.
-// 2. Tenant Alpha cannot access Tenant Bravo's storage even if requested.
-// 3. A panic or failure in Tenant Alpha's sandbox is contained (Blast Radius Containment)
-//    without impacting Supervisor or Tenant Bravo's execution.
+//  1. Tenant Alpha and Tenant Bravo have strictly isolated storage policies.
+//  2. Tenant Alpha cannot access Tenant Bravo's storage even if requested.
+//  3. A panic or failure in Tenant Alpha's sandbox is contained (Blast Radius Containment)
+//     without impacting Supervisor or Tenant Bravo's execution.
 func TestMultiTenant_StorageAndSandboxIsolation(t *testing.T) {
 	ctx := context.Background()
 

@@ -322,4 +322,3 @@ func compute() int { return 1 }`
 		})
 	}
 }
-

@@ -45,11 +45,11 @@ type AuditReport struct {
 }
 
 var forbiddenImports = map[string]string{
-	"os/exec":      "Command execution & shell spawning forbidden (backdoor risk)",
-	"syscall":      "Low-level kernel traps & system calls forbidden",
-	"unsafe":       "Direct memory tampering via unsafe pointers forbidden",
-	"plugin":       "Dynamic shared library loading forbidden",
-	"runtime/cgo":  "CGo native code invocation forbidden",
+	"os/exec":     "Command execution & shell spawning forbidden (backdoor risk)",
+	"syscall":     "Low-level kernel traps & system calls forbidden",
+	"unsafe":      "Direct memory tampering via unsafe pointers forbidden",
+	"plugin":      "Dynamic shared library loading forbidden",
+	"runtime/cgo": "CGo native code invocation forbidden",
 }
 
 // ConfigZero defines the module metadata and runtime specification declared in config.zero.
@@ -57,8 +57,8 @@ type ConfigZero struct {
 	Name             string                    `json:"name" yaml:"name"`
 	Version          string                    `json:"version" yaml:"version"`
 	Tenant           string                    `json:"tenant" yaml:"tenant"`
-	Target           string                    `json:"target" yaml:"target"`                 // Default: "wasip1"
-	Entrypoint       string                    `json:"entrypoint" yaml:"entrypoint"`         // Default: "main.go"
+	Target           string                    `json:"target" yaml:"target"`         // Default: "wasip1"
+	Entrypoint       string                    `json:"entrypoint" yaml:"entrypoint"` // Default: "main.go"
 	Description      string                    `json:"description" yaml:"description"`
 	MemoryLimitPages uint32                    `json:"memory_limit_pages" yaml:"memory_limit_pages"`
 	Timeout          string                    `json:"timeout" yaml:"timeout"`

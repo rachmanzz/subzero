@@ -360,20 +360,31 @@ func TestContainerSpawner_TCP_PortMapping(t *testing.T) {
 
 // TestContainerSpawner_RealDocker_IfAvailable tests actual Docker execution via OSCommandRunner if Docker is running.
 func TestContainerSpawner_RealDocker_IfAvailable(t *testing.T) {
+	requireDocker := os.Getenv("REQUIRE_DOCKER") == "1" || os.Getenv("REQUIRE_DOCKER") == "true"
+
 	if _, err := exec.LookPath("docker"); err != nil {
+		if requireDocker {
+			t.Fatalf("REQUIRE_DOCKER is set but docker binary was not found on host: %v", err)
+		}
 		t.Skip("docker binary not found on host, skipping live docker test")
 	}
 
-	checkCtx, checkCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer checkCancel()
 	if err := exec.CommandContext(checkCtx, "docker", "info").Run(); err != nil {
+		if requireDocker {
+			t.Fatalf("REQUIRE_DOCKER is set but docker daemon is not accessible: %v", err)
+		}
 		t.Skip("docker daemon not running or accessible, skipping live docker test")
 	}
 
 	// Also verify that the target image exists, avoiding CI failures when docker daemon is up but image is unbuilt
-	imgCtx, imgCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	imgCtx, imgCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer imgCancel()
 	if err := exec.CommandContext(imgCtx, "docker", "image", "inspect", "subzero-worker:latest").Run(); err != nil {
+		if requireDocker {
+			t.Fatalf("REQUIRE_DOCKER is set but image subzero-worker:latest was not found: %v", err)
+		}
 		t.Skip("docker image subzero-worker:latest not built or present on host, skipping live docker test")
 	}
 
@@ -386,15 +397,15 @@ func TestContainerSpawner_RealDocker_IfAvailable(t *testing.T) {
 		Scheme:        "tcp",
 		Endpoint:      "127.0.0.1:9095",
 		SecretKey:     secretKey,
-		IdleTimeout:   5 * time.Second,
-		ReadyTimeout:  5 * time.Second,
+		IdleTimeout:   10 * time.Second,
+		ReadyTimeout:  20 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("NewContainerSpawner failed: %v", err)
 	}
 	defer spawner.Stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
 	if err := spawner.EnsureRunning(ctx); err != nil {
@@ -402,4 +413,3 @@ func TestContainerSpawner_RealDocker_IfAvailable(t *testing.T) {
 	}
 	t.Log("✓ Live docker worker spawned and ready")
 }
-

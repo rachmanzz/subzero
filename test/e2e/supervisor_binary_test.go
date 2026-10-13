@@ -234,4 +234,3 @@ func TestSupervisorBinary_HTTPIngressScheme(t *testing.T) {
 	}
 	t.Logf("✓ Live subzero-supervisor binary executed task over HTTP ingress successfully: %+v", result)
 }
-

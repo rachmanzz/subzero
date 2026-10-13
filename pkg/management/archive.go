@@ -13,11 +13,11 @@ import (
 )
 
 var (
-	ErrZipSlipAttempt       = errors.New("security: zip-slip path traversal attempt detected")
-	ErrArchiveTooLarge      = errors.New("security: unpacked archive size exceeds maximum limit")
-	ErrTooManyFiles         = errors.New("security: archive contains too many files")
+	ErrZipSlipAttempt        = errors.New("security: zip-slip path traversal attempt detected")
+	ErrArchiveTooLarge       = errors.New("security: unpacked archive size exceeds maximum limit")
+	ErrTooManyFiles          = errors.New("security: archive contains too many files")
 	ErrMissingMainEntrypoint = errors.New("structure: archive must contain a main package with main() entrypoint")
-	ErrInvalidFileType      = errors.New("structure: forbidden file type in archive (only .go, go.mod, go.sum allowed)")
+	ErrInvalidFileType       = errors.New("structure: forbidden file type in archive (only .go, go.mod, go.sum allowed)")
 )
 
 // ArchiveLimits configures safety thresholds against decompression bombs.

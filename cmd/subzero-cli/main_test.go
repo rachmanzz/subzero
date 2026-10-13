@@ -399,5 +399,3 @@ func TestCLI_HandleModuleCommandDispatch(t *testing.T) {
 		t.Fatalf("expected nil for empty args, got: %v", err)
 	}
 }
-
-

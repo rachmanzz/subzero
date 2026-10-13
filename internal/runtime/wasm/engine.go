@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package wasm
 
 import (
@@ -35,15 +37,12 @@ var (
 
 // Config configures the Wazero WebAssembly sandbox.
 type Config struct {
-	MemoryLimitPages         uint32        // Memory limit in 64KB Wasm pages (e.g. 512 pages = 32MB)
-	DefaultTimeout           time.Duration // Default timeout per execution (e.g. 10s)
-	DefaultFuel               uint64        // Default operation quota (0 = disabled/unlimited)
+	MemoryLimitPages          uint32                  // Memory limit in 64KB Wasm pages (e.g. 512 pages = 32MB)
+	DefaultTimeout            time.Duration           // Default timeout per execution (e.g. 10s)
+	DefaultFuel               uint64                  // Default operation quota (0 = disabled/unlimited)
 	DisableCloseOnContextDone bool                    // If true, disables context cancellation preemption (default: false, meaning preemption is enabled)
 	CompilationCache          wazero.CompilationCache // Shared compilation cache across runtime instances
 }
-
-// defaultSharedCompilationCache shares JIT compilation across runtime instances for PRD sub-second cold starts.
-var defaultSharedCompilationCache = wazero.NewCompilationCache()
 
 // DefaultConfig returns safe multi-tenant sandbox defaults.
 func DefaultConfig() Config {
@@ -57,9 +56,11 @@ func DefaultConfig() Config {
 
 // Engine manages WebAssembly execution environments using Wazero (pure-Go, zero CGo).
 type Engine struct {
-	cfg   Config
-	rt    wazero.Runtime
-	cache sync.Map // map[string]wazero.CompiledModule (keyed by sha256 of bytecode)
+	cfg       Config
+	rt        wazero.Runtime
+	compCache wazero.CompilationCache
+	ownsCache bool
+	cache     sync.Map // map[string]wazero.CompiledModule (keyed by sha256 of bytecode)
 }
 
 // NewEngine initializes a Wazero runtime with WASI preview1 support and resource sandboxing.
@@ -72,8 +73,10 @@ func NewEngine(ctx context.Context, cfg Config) (*Engine, error) {
 	}
 
 	compCache := cfg.CompilationCache
+	ownsCache := false
 	if compCache == nil {
-		compCache = defaultSharedCompilationCache
+		compCache = wazero.NewCompilationCache()
+		ownsCache = true
 	}
 
 	rtCfg := wazero.NewRuntimeConfig().
@@ -86,18 +89,26 @@ func NewEngine(ctx context.Context, cfg Config) (*Engine, error) {
 	// Instantiate WASI snapshot preview1 (needed for Go wasip1 targets)
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
 		_ = rt.Close(ctx)
+		if ownsCache && compCache != nil {
+			_ = compCache.Close(ctx)
+		}
 		return nil, fmt.Errorf("wasm: failed to instantiate wasi: %w", err)
 	}
 
 	// Instantiate subzero_host host function module
 	if err := RegisterHostModule(ctx, rt); err != nil {
 		_ = rt.Close(ctx)
+		if ownsCache && compCache != nil {
+			_ = compCache.Close(ctx)
+		}
 		return nil, fmt.Errorf("wasm: failed to instantiate subzero_host: %w", err)
 	}
 
 	return &Engine{
-		cfg: cfg,
-		rt:  rt,
+		cfg:       cfg,
+		rt:        rt,
+		compCache: compCache,
+		ownsCache: ownsCache,
 	}, nil
 }
 
@@ -370,7 +381,7 @@ func (e *Engine) compileOrGet(ctx context.Context, wasmBytes []byte, listener *f
 	return compiled, nil
 }
 
-// Close shuts down the Wazero runtime and releases all compiled modules.
+// Close shuts down the Wazero runtime and releases all compiled modules and owned caches.
 func (e *Engine) Close(ctx context.Context) error {
 	e.cache.Range(func(_, val any) bool {
 		if cm, ok := val.(wazero.CompiledModule); ok {
@@ -378,5 +389,11 @@ func (e *Engine) Close(ctx context.Context) error {
 		}
 		return true
 	})
-	return e.rt.Close(ctx)
+	rtErr := e.rt.Close(ctx)
+	if e.ownsCache && e.compCache != nil {
+		if err := e.compCache.Close(ctx); err != nil && rtErr == nil {
+			rtErr = err
+		}
+	}
+	return rtErr
 }

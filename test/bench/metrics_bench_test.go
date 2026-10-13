@@ -124,8 +124,10 @@ func TestTargetMetric_WasmSandboxColdStart(t *testing.T) {
 		execTimeout = 60 * time.Second
 	}
 
-	// Warm up engine if needed or allow realistic threshold for cold VM / CI compilation environments
-	// PRD target is sub-second (< 1s) under standard execution; allow up to 2.5s for cold host caches.
+	// PRD Section 2 target: sub-second (< 1s) nominal for isolated Wasm sandbox execution.
+	// We allow up to 2.5s threshold during full-suite multi-package parallel execution
+	// to prevent flakiness caused by host CPU contention during concurrent JIT compilation.
+	nominalTarget := 1000 * time.Millisecond
 	maxColdStartThreshold := 2500 * time.Millisecond
 
 	start := time.Now()
@@ -144,9 +146,9 @@ func TestTargetMetric_WasmSandboxColdStart(t *testing.T) {
 			t.Errorf("Wasm cold-start latency under -race (%v) exceeded threshold of %v", latency, maxRaceThreshold)
 		}
 	} else {
-		t.Logf("[Target Metric PRD 2] Wasm Sandbox Cold-Start Latency: %v (Target: < 1s nominal, limit: %v)", latency, maxColdStartThreshold)
+		t.Logf("[Target Metric PRD 2] Wasm Sandbox Cold-Start Latency: %v (Nominal PRD: < %v, Suite limit: %v)", latency, nominalTarget, maxColdStartThreshold)
 		if latency >= maxColdStartThreshold {
-			t.Errorf("Wasm cold-start latency (%v) exceeded target threshold of %v", latency, maxColdStartThreshold)
+			t.Errorf("Wasm cold-start latency (%v) exceeded test suite threshold of %v", latency, maxColdStartThreshold)
 		}
 	}
 }

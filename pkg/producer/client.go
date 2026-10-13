@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package producer
 
 import (
@@ -14,7 +16,7 @@ import (
 )
 
 var (
-	ErrNilTask      = errors.New("producer: task message cannot be nil")
+	ErrNilTask       = errors.New("producer: task message cannot be nil")
 	ErrEmptyEndpoint = errors.New("producer: endpoint cannot be empty")
 )
 
@@ -25,7 +27,7 @@ type Config struct {
 	SecretKey     []byte        // HMAC-SHA256 signature key
 	Timeout       time.Duration // Network request timeout
 	StorageDriver storage.Driver
-	QueueDriver   queue.Driver  // Optional distributed queue driver (fiber-extras/v3/queue)
+	QueueDriver   queue.Driver // Optional distributed queue driver (fiber-extras/v3/queue)
 }
 
 // Client provides an API SDK for Main API Gateways to interface with Subzero.
@@ -153,4 +155,3 @@ func (c *Client) EnqueueWithDriver(ctx context.Context, driver queue.Driver, top
 	msg := queue.NewMessage(topic, payload, opts...)
 	return driver.Enqueue(ctx, msg)
 }
-

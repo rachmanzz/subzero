@@ -354,4 +354,3 @@ func TestUnpackTarGz_ExactByteLimitBoundary(t *testing.T) {
 		t.Fatalf("expected ErrArchiveTooLarge, got: %v", err)
 	}
 }
-

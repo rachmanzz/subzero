@@ -25,11 +25,11 @@ type WasmModule struct {
 
 // CompileOptions defines compiler flags and parameters.
 type CompileOptions struct {
-	TenantID    string
-	ModuleName  string
-	TargetOS    string // Default: "wasip1"
-	Optimize    bool   // Strip symbols (-ldflags="-s -w")
-	BuildTags   string
+	TenantID   string
+	ModuleName string
+	TargetOS   string // Default: "wasip1"
+	Optimize   bool   // Strip symbols (-ldflags="-s -w")
+	BuildTags  string
 }
 
 // CompileResult represents the output of a Wasm compilation process.

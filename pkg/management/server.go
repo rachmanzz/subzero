@@ -89,11 +89,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	modules, _ := s.cfg.Store.List(r.Context(), "")
 	status := map[string]any{
-		"engine":          "subzero",
-		"status":          "online",
-		"compiler":        s.cfg.Compiler.Name(),
-		"modules_count":   len(modules),
-		"scale_to_zero":   true,
+		"engine":        "subzero",
+		"status":        "online",
+		"compiler":      s.cfg.Compiler.Name(),
+		"modules_count": len(modules),
+		"scale_to_zero": true,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

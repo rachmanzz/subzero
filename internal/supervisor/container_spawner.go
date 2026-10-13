@@ -63,18 +63,18 @@ func (r *OSCommandRunner) Start(ctx context.Context, name string, args ...string
 
 // ContainerSpawnerConfig defines configuration for automated container worker management.
 type ContainerSpawnerConfig struct {
-	Engine        string                    // "docker" or "podman", defaults to "docker"
-	Image         string                    // Container image, defaults to "subzero-worker:latest"
-	ContainerName string                    // Optional custom container name
-	Scheme        string                    // Transport scheme ("unix", "tcp", "http")
-	Endpoint      string                    // Socket path or network address
-	SecretKey     []byte                    // HMAC secret key
-	IdleTimeout   time.Duration             // Time of inactivity before auto-termination
-	ReadyTimeout  time.Duration             // Max time to wait for cold-start readiness
-	PolicyPath    string                    // Optional path to worker permission policy file
-	WorkerPolicy  *permission.WorkerPolicy  // Optional programmatic worker permission policy
-	ExtraArgs     []string                  // Additional container engine flags (e.g. CPU/RAM constraints)
-	Runner        CommandRunner             // Container command runner (defaults to OSCommandRunner)
+	Engine        string                   // "docker" or "podman", defaults to "docker"
+	Image         string                   // Container image, defaults to "subzero-worker:latest"
+	ContainerName string                   // Optional custom container name
+	Scheme        string                   // Transport scheme ("unix", "tcp", "http")
+	Endpoint      string                   // Socket path or network address
+	SecretKey     []byte                   // HMAC secret key
+	IdleTimeout   time.Duration            // Time of inactivity before auto-termination
+	ReadyTimeout  time.Duration            // Max time to wait for cold-start readiness
+	PolicyPath    string                   // Optional path to worker permission policy file
+	WorkerPolicy  *permission.WorkerPolicy // Optional programmatic worker permission policy
+	ExtraArgs     []string                 // Additional container engine flags (e.g. CPU/RAM constraints)
+	Runner        CommandRunner            // Container command runner (defaults to OSCommandRunner)
 }
 
 var containerCounter uint64

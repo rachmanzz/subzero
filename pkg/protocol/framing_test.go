@@ -161,4 +161,3 @@ func TestEncodeFramedTaskRoundTrip(t *testing.T) {
 		t.Fatalf("decoded task mismatch: got %+v, want %+v", decoded, task)
 	}
 }
-

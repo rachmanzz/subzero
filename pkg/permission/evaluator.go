@@ -8,16 +8,16 @@ import (
 )
 
 var (
-	ErrNilPolicy              = errors.New("permission: worker policy cannot be nil")
-	ErrUnauthorizedHostCall   = errors.New("permission: requested host call not permitted by worker policy")
-	ErrUnauthorizedPath       = errors.New("permission: requested filesystem path not permitted by worker policy")
-	ErrPathTraversal          = errors.New("permission: path traversal or relative path forbidden")
-	ErrSensitivePath          = errors.New("permission: access to sensitive system directory forbidden")
-	ErrUnauthorizedS3Bucket   = errors.New("permission: requested S3 bucket not permitted by worker policy")
-	ErrUnauthorizedS3Prefix   = errors.New("permission: requested S3 prefix not permitted by worker policy")
-	ErrUnauthorizedOperation  = errors.New("permission: requested storage operation not permitted by worker policy")
-	ErrUnauthorizedExtension  = errors.New("permission: requested file extension not permitted by worker policy")
-	ErrFileTooLarge           = errors.New("permission: requested file size exceeds worker policy limit")
+	ErrNilPolicy             = errors.New("permission: worker policy cannot be nil")
+	ErrUnauthorizedHostCall  = errors.New("permission: requested host call not permitted by worker policy")
+	ErrUnauthorizedPath      = errors.New("permission: requested filesystem path not permitted by worker policy")
+	ErrPathTraversal         = errors.New("permission: path traversal or relative path forbidden")
+	ErrSensitivePath         = errors.New("permission: access to sensitive system directory forbidden")
+	ErrUnauthorizedS3Bucket  = errors.New("permission: requested S3 bucket not permitted by worker policy")
+	ErrUnauthorizedS3Prefix  = errors.New("permission: requested S3 prefix not permitted by worker policy")
+	ErrUnauthorizedOperation = errors.New("permission: requested storage operation not permitted by worker policy")
+	ErrUnauthorizedExtension = errors.New("permission: requested file extension not permitted by worker policy")
+	ErrFileTooLarge          = errors.New("permission: requested file size exceeds worker policy limit")
 )
 
 // Sensitive root directories that can never be mounted into a guest sandbox.

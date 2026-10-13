@@ -505,5 +505,3 @@ func TestManagementServer_InspectModulePolicy(t *testing.T) {
 		t.Errorf("expected 404 for nonexistent module, got %d", w404.Code)
 	}
 }
-
-

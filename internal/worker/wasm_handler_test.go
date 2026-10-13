@@ -307,4 +307,90 @@ func main() {
 	}
 }
 
+// TestWorkerWasmHandler_DomainSeparation_SourceURI_vs_HostCall locks in the intentional
+// architecture behavior (Finding N-1):
+//  1. Control Plane Ingress (task.SourceURI): Host supervisor streams data into Stdin governed
+//     by WorkerPolicy ceiling boundary.
+//  2. Guest Sandbox Space (Hostcalls): Guest Wasm execution enforces strict least-privilege
+//     and is denied if not explicitly requested in the module manifest, even if WorkerPolicy allows it.
+func TestWorkerWasmHandler_DomainSeparation_SourceURI_vs_HostCall(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	testFilePath := tmpDir + "/input.csv"
+	_ = os.WriteFile(testFilePath, []byte("1,alpha\n2,beta\n"), 0644)
 
+	// Module tries to call GetStorageBlob directly from guest space
+	goSource := `package main
+import (
+	"fmt"
+	"github.com/rachmanzz/subzero/pkg/sdk"
+)
+func main() {
+	req, _ := sdk.ReadRequestFromEnv()
+	_, err := sdk.GetStorageBlob(req.SourceURI)
+	if err != nil {
+		fmt.Printf("{\"is_success\":false,\"error_message\":%q}\n", err.Error())
+		return
+	}
+	fmt.Printf("{\"is_success\":true,\"processed_rows\":2}\n")
+}
+`
+	compiler := management.NewGoCompiler("")
+	compileRes, err := compiler.Compile(ctx, []byte(goSource), management.CompileOptions{
+		TenantID:   "tenant-n1",
+		ModuleName: "guest-probe",
+		TargetOS:   "wasip1",
+		Optimize:   true,
+	})
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	cfg := wasm.DefaultConfig()
+	cfg.DefaultTimeout = 60 * time.Second
+	engine, err := wasm.NewEngine(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	defer engine.Close(ctx)
+
+	// Worker policy allows storage:get_object and filesystem
+	policy := permission.DefaultWorkerPolicy()
+	policy.AllowedHostCalls = append(policy.AllowedHostCalls, "storage:get_object")
+	policy.Filesystem.AllowedReadOnlyRoots = append(policy.Filesystem.AllowedReadOnlyRoots, tmpDir)
+
+	resolver := func(target string) ([]byte, error) {
+		return compileRes.WasmBytes, nil
+	}
+
+	// Module manifest explicitly DOES NOT request "storage:get_object"
+	moduleReqResolverWithoutPerm := func(target string) (*permission.ModuleRequest, error) {
+		return &permission.ModuleRequest{
+			HostCalls: []string{}, // No host calls requested
+		}, nil
+	}
+
+	handler := worker.NewWasmHandlerWithConfig(worker.WasmHandlerConfig{
+		Engine:                engine,
+		Resolver:              resolver,
+		WorkerPolicy:          &policy,
+		ModuleRequestResolver: moduleReqResolverWithoutPerm,
+	})
+
+	task := &protocol.TaskMessage{
+		TaskID:       "task-n1-001",
+		TenantID:     "tenant-n1",
+		ActionTarget: "tenant-n1/guest-probe",
+		SourceURI:    "file://" + testFilePath,
+	}
+
+	// The task ingress (SourceURI) succeeds at host level, but guest hostcall is denied fail-closed
+	res, err := handler(ctx, task)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if res.IsSuccess {
+		t.Fatalf("expected guest hostcall storageGet to be denied fail-closed when not in module manifest")
+	}
+	t.Logf("✓ Verified N-1: Hostcall denied fail-closed (%s) while SourceURI ingress respected worker ceiling", res.ErrorMessage)
+}

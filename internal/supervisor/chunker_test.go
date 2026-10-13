@@ -133,8 +133,8 @@ func TestChunkFanOut_RowRanges(t *testing.T) {
 
 func TestChunkFanOut_SingleFailurePropagates(t *testing.T) {
 	task := &protocol.TaskMessage{
-		TaskID:       "task-failing",
-		TenantID:     "tenant-acme",
+		TaskID:   "task-failing",
+		TenantID: "tenant-acme",
 		CustomConfig: map[string]string{
 			"sheets": "A,B,C",
 		},

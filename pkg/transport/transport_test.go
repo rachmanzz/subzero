@@ -329,5 +329,3 @@ func generateTestCert(caCertPEM, caKeyPEM []byte, commonName string, isServer bo
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
 	return certPEM, keyPEM, nil
 }
-
-

@@ -108,4 +108,3 @@ func ReadAllStream(ctx context.Context, storageRef string) ([]byte, error) {
 	defer rc.Close()
 	return io.ReadAll(rc)
 }
-

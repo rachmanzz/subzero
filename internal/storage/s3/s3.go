@@ -56,7 +56,7 @@ type Config struct {
 	Endpoint     string // Optional custom endpoint for MinIO, Cloudflare R2, or LocalStack
 	AccessKey    string
 	SecretKey    string
-	UsePathStyle bool   // Set true for MinIO and LocalStack
+	UsePathStyle bool // Set true for MinIO and LocalStack
 }
 
 // Driver implements storage.Driver for AWS S3 and MinIO.

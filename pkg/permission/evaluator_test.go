@@ -238,4 +238,3 @@ func TestEvaluate_LoggerWarnAllowedInDefaultPolicy(t *testing.T) {
 		t.Errorf("expected logger:warn to be granted")
 	}
 }
-
