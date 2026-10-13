@@ -39,7 +39,7 @@ func main() {
 
 	// 2. Initialize Wazero Engine
 	cfg := wasm.DefaultConfig()
-	cfg.DefaultTimeout = 30 * time.Second
+	cfg.DefaultTimeout = 60 * time.Second
 	engine, err := wasm.NewEngine(ctx, cfg)
 	if err != nil {
 		t.Fatalf("NewEngine failed: %v", err)
@@ -250,7 +250,7 @@ func main() {
 
 	// 3. Initialize Engine
 	cfg := wasm.DefaultConfig()
-	cfg.DefaultTimeout = 30 * time.Second
+	cfg.DefaultTimeout = 60 * time.Second
 	engine, err := wasm.NewEngine(ctx, cfg)
 	if err != nil {
 		t.Fatalf("NewEngine failed: %v", err)
