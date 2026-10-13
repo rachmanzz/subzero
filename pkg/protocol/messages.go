@@ -11,6 +11,17 @@ type TaskMessage struct {
 	ActionTarget string            `json:"action_target"`
 	SourceURI    string            `json:"source_uri"`
 	CustomConfig map[string]string `json:"custom_config,omitempty"`
+	Timestamp    int64             `json:"timestamp,omitempty"`
+	Nonce        string            `json:"nonce,omitempty"`
+}
+
+// IsStale checks whether the task message timestamp is older than maxAge (if timestamp is set).
+func (m *TaskMessage) IsStale(maxAge time.Duration) bool {
+	if m.Timestamp == 0 {
+		return false
+	}
+	msgTime := time.Unix(m.Timestamp, 0)
+	return time.Since(msgTime) > maxAge
 }
 
 // ResultMessage defines the execution result returned by Worker to Supervisor / Producer.

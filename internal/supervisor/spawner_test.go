@@ -162,3 +162,54 @@ func TestProcessSpawner_WithCustomPolicy(t *testing.T) {
 		t.Fatalf("expected state RUNNING, got %s", spawner.State())
 	}
 }
+
+func TestProcessSpawner_ConcurrentEnsureRunning(t *testing.T) {
+	workerBin := filepath.Join("..", "..", "bin", "subzero-worker")
+	if _, err := os.Stat(workerBin); os.IsNotExist(err) {
+		t.Skip("skipping spawner test: bin/subzero-worker binary not found, run make build first")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "subzero-conc-spawner-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sockPath := filepath.Join(tmpDir, "worker.sock")
+	secretKey := []byte("spawner-secret-key-32b-subzero!")
+
+	spawner, err := supervisor.NewProcessSpawner(supervisor.SpawnerConfig{
+		WorkerBinary: workerBin,
+		Scheme:       "unix",
+		Endpoint:     sockPath,
+		SecretKey:    secretKey,
+		IdleTimeout:  1 * time.Second,
+		ReadyTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewProcessSpawner failed: %v", err)
+	}
+	defer spawner.Stop()
+
+	// Launch multiple concurrent EnsureRunning calls simultaneously
+	concurrency := 8
+	errCh := make(chan error, concurrency)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			errCh <- spawner.EnsureRunning(ctx)
+		}()
+	}
+
+	for i := 0; i < concurrency; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("concurrent EnsureRunning failed: %v", err)
+		}
+	}
+
+	if spawner.State() != supervisor.StateRunning {
+		t.Fatalf("expected state RUNNING, got %s", spawner.State())
+	}
+}

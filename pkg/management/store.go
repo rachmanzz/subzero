@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
 var (
-	ErrModuleNotFound = errors.New("management: wasm module not found")
+	ErrModuleNotFound  = errors.New("management: wasm module not found")
+	ErrInvalidModuleID = errors.New("management: invalid module ID or path traversal attempt")
 )
 
 // Store defines the pluggable contract for persisting and retrieving Wasm modules.
@@ -37,15 +39,31 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 	return &FileStore{baseDir: baseDir}, nil
 }
 
-func (s *FileStore) moduleDir(moduleID string) string {
-	return filepath.Join(s.baseDir, moduleID)
+func (s *FileStore) moduleDir(moduleID string) (string, error) {
+	trimmed := strings.TrimSpace(moduleID)
+	if trimmed == "" {
+		return "", ErrInvalidModuleID
+	}
+	if strings.Contains(trimmed, "..") || strings.Contains(trimmed, "/") || strings.Contains(trimmed, "\\") {
+		return "", fmt.Errorf("%w: %q", ErrInvalidModuleID, moduleID)
+	}
+	cleanBase := filepath.Clean(s.baseDir)
+	target := filepath.Join(cleanBase, trimmed)
+	cleanTarget := filepath.Clean(target)
+	if !strings.HasPrefix(cleanTarget, cleanBase+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidModuleID, moduleID)
+	}
+	return cleanTarget, nil
 }
 
 func (s *FileStore) Save(ctx context.Context, module *WasmModule, wasmBytes []byte, sourceBytes []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	dir := s.moduleDir(module.ID)
+	dir, err := s.moduleDir(module.ID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("management/store: create dir failed: %w", err)
 	}
@@ -111,7 +129,12 @@ func (s *FileStore) Get(ctx context.Context, moduleID string) (*WasmModule, erro
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	metaPath := filepath.Join(s.moduleDir(moduleID), "meta.json")
+	dir, err := s.moduleDir(moduleID)
+	if err != nil {
+		return nil, err
+	}
+
+	metaPath := filepath.Join(dir, "meta.json")
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -132,7 +155,12 @@ func (s *FileStore) GetWasmBytes(ctx context.Context, moduleID string) ([]byte, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	wasmPath := filepath.Join(s.moduleDir(moduleID), "module.wasm")
+	dir, err := s.moduleDir(moduleID)
+	if err != nil {
+		return nil, err
+	}
+
+	wasmPath := filepath.Join(dir, "module.wasm")
 	bytes, err := os.ReadFile(wasmPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -148,7 +176,11 @@ func (s *FileStore) Delete(ctx context.Context, moduleID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	dir := s.moduleDir(moduleID)
+	dir, err := s.moduleDir(moduleID)
+	if err != nil {
+		return err
+	}
+
 	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("management/store: delete module %q failed: %w", moduleID, err)
 	}

@@ -2,6 +2,7 @@ package management
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -290,6 +291,10 @@ func (s *Server) handleDownloadWasm(w http.ResponseWriter, r *http.Request) {
 	moduleID := chi.URLParam(r, "id")
 	wasmBytes, err := s.cfg.Store.GetWasmBytes(r.Context(), moduleID)
 	if err != nil {
+		if errors.Is(err, ErrInvalidModuleID) {
+			http.Error(w, "invalid module id: path traversal forbidden", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "wasm module not found", http.StatusNotFound)
 		return
 	}
@@ -302,6 +307,10 @@ func (s *Server) handleDownloadWasm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteModule(w http.ResponseWriter, r *http.Request) {
 	moduleID := chi.URLParam(r, "id")
 	if err := s.cfg.Store.Delete(r.Context(), moduleID); err != nil {
+		if errors.Is(err, ErrInvalidModuleID) {
+			http.Error(w, "invalid module id: path traversal forbidden", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "failed to delete module: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -340,6 +349,12 @@ func (s *Server) handleInspectModulePolicy(w http.ResponseWriter, r *http.Reques
 	moduleID := chi.URLParam(r, "id")
 	mod, err := s.cfg.Store.Get(r.Context(), moduleID)
 	if err != nil {
+		if errors.Is(err, ErrInvalidModuleID) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid module id: path traversal forbidden"})
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "wasm module not found"})

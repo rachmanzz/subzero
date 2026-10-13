@@ -60,12 +60,23 @@ func main() {
 	}
 
 	resolver := func(target string) ([]byte, error) {
-		// 1. Direct file path
-		if strings.HasSuffix(target, ".wasm") {
-			return os.ReadFile(target)
+		trimmed := strings.TrimSpace(target)
+		if strings.Contains(trimmed, "..") {
+			return nil, fmt.Errorf("security: path traversal forbidden in target %q", target)
 		}
+
+		// 1. Direct file path: must end with .wasm and not contain traversal
+		if strings.HasSuffix(trimmed, ".wasm") {
+			cleanTarget := filepath.Clean(trimmed)
+			return os.ReadFile(cleanTarget)
+		}
+
 		// 2. Check in data/wasm/<target>/module.wasm
-		dataPath := filepath.Join(".", "data", "wasm", target, "module.wasm")
+		baseWasmDir, _ := filepath.Abs(filepath.Join(".", "data", "wasm"))
+		dataPath := filepath.Join(baseWasmDir, filepath.Clean(trimmed), "module.wasm")
+		if !strings.HasPrefix(dataPath, baseWasmDir+string(filepath.Separator)) {
+			return nil, fmt.Errorf("security: target %q escapes module directory", target)
+		}
 		if data, err := os.ReadFile(dataPath); err == nil {
 			return data, nil
 		}

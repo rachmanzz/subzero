@@ -112,7 +112,7 @@ func (d *Driver) resolveBucketAndKey(storageRef string) (string, string) {
 	bucket := d.cfg.Bucket
 	if strings.Contains(key, "/") {
 		parts := strings.SplitN(key, "/", 2)
-		if parts[0] != "" && (parts[0] == d.cfg.Bucket || d.cfg.Bucket == "" || d.cfg.Bucket == "tenant-vault") {
+		if parts[0] != "" && (parts[0] == d.cfg.Bucket || d.cfg.Bucket == "") {
 			bucket = parts[0]
 			key = parts[1]
 		}

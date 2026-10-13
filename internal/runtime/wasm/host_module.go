@@ -82,7 +82,9 @@ func RegisterHostModule(ctx context.Context, rt wazero.Runtime) error {
 
 			// Write actual data length to outReadPtr
 			if outReadPtr != 0 {
-				mem.WriteUint32Le(outReadPtr, uint32(len(data)))
+				if !mem.WriteUint32Le(outReadPtr, uint32(len(data))) {
+					return 4 // Memory write failed
+				}
 			}
 
 			if uint32(len(data)) > outMaxLen {

@@ -11,9 +11,9 @@ const (
 	// HeaderSize is 4 bytes (uint32 length) + 32 bytes (HMAC-SHA256 signature).
 	HeaderSize = 4 + SignatureSize
 
-	// DefaultMaxPayloadSize sets a reasonable upper limit for framed messages (64MB)
+	// DefaultMaxPayloadSize sets a reasonable upper limit for framed messages (16MB)
 	// to prevent malicious or malformed length fields from causing allocation bloat.
-	DefaultMaxPayloadSize = 64 * 1024 * 1024
+	DefaultMaxPayloadSize = 16 * 1024 * 1024
 )
 
 var (

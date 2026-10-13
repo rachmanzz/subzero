@@ -86,6 +86,7 @@ type ContainerSpawner struct {
 	state         WorkerState
 	proc          CommandProcess
 	containerName string
+	provCh        chan struct{}
 	mu            sync.RWMutex
 	stopped       bool
 }
@@ -203,73 +204,104 @@ func (s *ContainerSpawner) BuildRunArgs() []string {
 
 // EnsureRunning guarantees the worker container is active. If dormant, it executes a cold-start spawn.
 func (s *ContainerSpawner) EnsureRunning(ctx context.Context) error {
-	s.mu.Lock()
-	if s.stopped {
-		s.mu.Unlock()
-		return ErrSpawnerStopped
-	}
-
-	if s.state == StateRunning {
-		s.mu.Unlock()
-		return nil
-	}
-
-	// Cold-Start Trigger: DORMANT -> PROVISIONING
-	s.state = StateProvisioning
-
-	runArgs := s.BuildRunArgs()
-	proc, err := s.cfg.Runner.Start(ctx, s.cfg.Engine, runArgs...)
-	if err != nil {
-		s.state = StateDormant
-		s.mu.Unlock()
-		return fmt.Errorf("container_spawner: failed to start container (%s %s): %w", s.cfg.Engine, s.cfg.Image, err)
-	}
-
-	s.proc = proc
-	s.mu.Unlock()
-
-	// Monitor container exit in background to reset state to Dormant upon scale-to-zero auto-termination
-	go func(p CommandProcess) {
-		_ = p.Wait()
-		s.mu.Lock()
-		if s.proc == p {
-			s.proc = nil
-			s.state = StateDormant
-		}
-		s.mu.Unlock()
-	}(proc)
-
-	// Poll transport dialer until the containerized worker is ready
-	readyDeadline := time.Now().Add(s.cfg.ReadyTimeout)
 	for {
-		dialCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		conn, err := s.tr.Dial(dialCtx, s.cfg.Endpoint)
-		cancel()
+		s.mu.Lock()
+		if s.stopped {
+			s.mu.Unlock()
+			return ErrSpawnerStopped
+		}
 
-		if err == nil {
-			_ = conn.Close()
-			s.mu.Lock()
-			s.state = StateRunning
+		if s.state == StateRunning {
 			s.mu.Unlock()
 			return nil
 		}
 
-		if time.Now().After(readyDeadline) {
+		if s.state == StateProvisioning {
+			ch := s.provCh
+			s.mu.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		// Cold-Start Trigger: DORMANT -> PROVISIONING
+		s.state = StateProvisioning
+		provCh := make(chan struct{})
+		s.provCh = provCh
+
+		runArgs := s.BuildRunArgs()
+		proc, err := s.cfg.Runner.Start(ctx, s.cfg.Engine, runArgs...)
+		if err != nil {
+			s.state = StateDormant
+			close(provCh)
+			s.provCh = nil
+			s.mu.Unlock()
+			return fmt.Errorf("container_spawner: failed to start container (%s %s): %w", s.cfg.Engine, s.cfg.Image, err)
+		}
+
+		s.proc = proc
+		s.mu.Unlock()
+
+		// Monitor container exit in background to reset state to Dormant upon scale-to-zero auto-termination
+		go func(p CommandProcess) {
+			_ = p.Wait()
 			s.mu.Lock()
-			if s.proc == proc {
-				_ = proc.Kill()
-				s.cleanupContainer()
+			if s.proc == p {
 				s.proc = nil
 				s.state = StateDormant
 			}
 			s.mu.Unlock()
-			return ErrColdStartTimeout
-		}
+		}(proc)
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(15 * time.Millisecond):
+		// Poll transport dialer until the containerized worker is ready
+		readyDeadline := time.Now().Add(s.cfg.ReadyTimeout)
+		for {
+			dialCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			conn, err := s.tr.Dial(dialCtx, s.cfg.Endpoint)
+			cancel()
+
+			if err == nil {
+				_ = conn.Close()
+				s.mu.Lock()
+				s.state = StateRunning
+				close(provCh)
+				s.provCh = nil
+				s.mu.Unlock()
+				return nil
+			}
+
+			if time.Now().After(readyDeadline) {
+				s.mu.Lock()
+				if s.proc == proc {
+					_ = proc.Kill()
+					s.cleanupContainer()
+					s.proc = nil
+					s.state = StateDormant
+				}
+				close(provCh)
+				s.provCh = nil
+				s.mu.Unlock()
+				return ErrColdStartTimeout
+			}
+
+			select {
+			case <-ctx.Done():
+				s.mu.Lock()
+				if s.proc == proc {
+					_ = proc.Kill()
+					s.cleanupContainer()
+					s.proc = nil
+					s.state = StateDormant
+				}
+				close(provCh)
+				s.provCh = nil
+				s.mu.Unlock()
+				return ctx.Err()
+			case <-time.After(15 * time.Millisecond):
+			}
 		}
 	}
 }
@@ -287,6 +319,10 @@ func (s *ContainerSpawner) Stop() {
 	defer s.mu.Unlock()
 
 	s.stopped = true
+	if s.provCh != nil {
+		close(s.provCh)
+		s.provCh = nil
+	}
 	if s.proc != nil {
 		_ = s.proc.Kill()
 		s.proc = nil

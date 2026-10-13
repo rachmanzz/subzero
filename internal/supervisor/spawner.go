@@ -53,6 +53,7 @@ type ProcessSpawner struct {
 	tr      transport.Transport
 	state   WorkerState
 	cmd     *exec.Cmd
+	provCh  chan struct{}
 	mu      sync.RWMutex
 	stopped bool
 }
@@ -93,90 +94,119 @@ func (s *ProcessSpawner) State() WorkerState {
 
 // EnsureRunning guarantees a worker is active. If dormant, it executes a cold-start spawn.
 func (s *ProcessSpawner) EnsureRunning(ctx context.Context) error {
-	s.mu.Lock()
-	if s.stopped {
-		s.mu.Unlock()
-		return ErrSpawnerStopped
-	}
-
-	if s.state == StateRunning {
-		s.mu.Unlock()
-		return nil
-	}
-
-	// Cold-Start Trigger
-	s.state = StateProvisioning
-
-	args := []string{
-		"-scheme", s.cfg.Scheme,
-		"-endpoint", s.cfg.Endpoint,
-		"-secret", string(s.cfg.SecretKey),
-		"-idle-timeout", s.cfg.IdleTimeout.String(),
-	}
-
-	if s.cfg.PolicyPath != "" {
-		args = append(args, "-policy", s.cfg.PolicyPath)
-	}
-
-	cmd := exec.Command(s.cfg.WorkerBinary, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if s.cfg.WorkerPolicy != nil {
-		if policyBytes, err := json.Marshal(s.cfg.WorkerPolicy); err == nil {
-			cmd.Env = append(os.Environ(), "SUBZERO_WORKER_POLICY="+string(policyBytes))
-		}
-	}
-
-	if err := cmd.Start(); err != nil {
-		s.state = StateDormant
-		s.mu.Unlock()
-		return fmt.Errorf("spawner: failed to start worker process %q: %w", s.cfg.WorkerBinary, err)
-	}
-
-	s.cmd = cmd
-	s.mu.Unlock()
-
-	// Monitor child process exit in background to reset state to Dormant upon scale-to-zero
-	go func(c *exec.Cmd) {
-		_ = c.Wait()
-		s.mu.Lock()
-		if s.cmd == c {
-			s.cmd = nil
-			s.state = StateDormant
-		}
-		s.mu.Unlock()
-	}(cmd)
-
-	// Wait until worker is ready by polling the transport dialer
-	readyDeadline := time.Now().Add(s.cfg.ReadyTimeout)
 	for {
-		dialCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		conn, err := s.tr.Dial(dialCtx, s.cfg.Endpoint)
-		cancel()
+		s.mu.Lock()
+		if s.stopped {
+			s.mu.Unlock()
+			return ErrSpawnerStopped
+		}
 
-		if err == nil {
-			_ = conn.Close()
-			s.mu.Lock()
-			s.state = StateRunning
+		if s.state == StateRunning {
 			s.mu.Unlock()
 			return nil
 		}
 
-		if time.Now().After(readyDeadline) {
+		if s.state == StateProvisioning {
+			ch := s.provCh
+			s.mu.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		// Cold-Start Trigger
+		s.state = StateProvisioning
+		provCh := make(chan struct{})
+		s.provCh = provCh
+
+		args := []string{
+			"-scheme", s.cfg.Scheme,
+			"-endpoint", s.cfg.Endpoint,
+			"-secret", string(s.cfg.SecretKey),
+			"-idle-timeout", s.cfg.IdleTimeout.String(),
+		}
+
+		if s.cfg.PolicyPath != "" {
+			args = append(args, "-policy", s.cfg.PolicyPath)
+		}
+
+		cmd := exec.Command(s.cfg.WorkerBinary, args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if s.cfg.WorkerPolicy != nil {
+			if policyBytes, err := json.Marshal(s.cfg.WorkerPolicy); err == nil {
+				cmd.Env = append(os.Environ(), "SUBZERO_WORKER_POLICY="+string(policyBytes))
+			}
+		}
+
+		if err := cmd.Start(); err != nil {
+			s.state = StateDormant
+			close(provCh)
+			s.provCh = nil
+			s.mu.Unlock()
+			return fmt.Errorf("spawner: failed to start worker process %q: %w", s.cfg.WorkerBinary, err)
+		}
+
+		s.cmd = cmd
+		s.mu.Unlock()
+
+		// Monitor child process exit in background to reset state to Dormant upon scale-to-zero
+		go func(c *exec.Cmd) {
+			_ = c.Wait()
 			s.mu.Lock()
-			if s.cmd == cmd {
-				_ = cmd.Process.Kill()
+			if s.cmd == c {
+				s.cmd = nil
 				s.state = StateDormant
 			}
 			s.mu.Unlock()
-			return ErrColdStartTimeout
-		}
+		}(cmd)
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(10 * time.Millisecond):
+		// Wait until worker is ready by polling the transport dialer
+		readyDeadline := time.Now().Add(s.cfg.ReadyTimeout)
+		for {
+			dialCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			conn, err := s.tr.Dial(dialCtx, s.cfg.Endpoint)
+			cancel()
+
+			if err == nil {
+				_ = conn.Close()
+				s.mu.Lock()
+				s.state = StateRunning
+				close(provCh)
+				s.provCh = nil
+				s.mu.Unlock()
+				return nil
+			}
+
+			if time.Now().After(readyDeadline) {
+				s.mu.Lock()
+				if s.cmd == cmd {
+					_ = cmd.Process.Kill()
+					s.state = StateDormant
+				}
+				close(provCh)
+				s.provCh = nil
+				s.mu.Unlock()
+				return ErrColdStartTimeout
+			}
+
+			select {
+			case <-ctx.Done():
+				s.mu.Lock()
+				if s.cmd == cmd {
+					_ = cmd.Process.Kill()
+					s.state = StateDormant
+				}
+				close(provCh)
+				s.provCh = nil
+				s.mu.Unlock()
+				return ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
 		}
 	}
 }
@@ -187,6 +217,10 @@ func (s *ProcessSpawner) Stop() {
 	defer s.mu.Unlock()
 
 	s.stopped = true
+	if s.provCh != nil {
+		close(s.provCh)
+		s.provCh = nil
+	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 		s.cmd = nil

@@ -492,3 +492,25 @@ func main() {}
 		})
 	}
 }
+
+func TestVerifyStructure_EntrypointTraversalRejected(t *testing.T) {
+	dir := createTestPkgDir(t, map[string]string{
+		"config.zero": `name: evil-pkg
+version: 1.0.0
+entrypoint: ../../../../etc/passwd
+target: wasip1`,
+		"readme.md": "# Documentation",
+		"main.go": `package main
+func main() {}
+`,
+	})
+	defer os.RemoveAll(dir)
+
+	_, err := management.VerifyModulePackage(dir)
+	if err == nil {
+		t.Fatal("expected traversal entrypoint to be rejected, but succeeded")
+	}
+	if !strings.Contains(err.Error(), "forbidden path traversal") && !strings.Contains(err.Error(), "escapes package workspace") {
+		t.Fatalf("expected traversal error, got: %v", err)
+	}
+}

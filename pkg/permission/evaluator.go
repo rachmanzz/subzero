@@ -3,6 +3,7 @@ package permission
 import (
 	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -334,28 +335,68 @@ func sanitizeAndValidatePath(p string) (string, error) {
 }
 
 // IsPathUnderRoots checks whether a path resides inside any of the allowed root directories.
-func IsPathUnderRoots(path string, roots []string) bool {
+func IsPathUnderRoots(p string, roots []string) bool {
 	if len(roots) == 0 {
 		return false
 	}
+	cleanPath := filepath.Clean(strings.TrimSpace(p))
 	for _, root := range roots {
 		cleanRoot := filepath.Clean(strings.TrimSpace(root))
 		if cleanRoot == "/" {
 			return true
 		}
-		if path == cleanRoot || strings.HasPrefix(path, cleanRoot+string(filepath.Separator)) {
+		if cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator)) {
 			return true
 		}
 	}
 	return false
 }
 
+// cleanS3Prefix normalizes an S3 URI or prefix to prevent traversal escapes (e.g. dot-segments).
+func cleanS3Prefix(p string) string {
+	trimmed := strings.TrimSpace(p)
+	if trimmed == "*" {
+		return trimmed
+	}
+	scheme := ""
+	if strings.HasPrefix(trimmed, "s3://") {
+		scheme = "s3://"
+	} else if strings.HasPrefix(trimmed, "minio://") {
+		scheme = "minio://"
+	} else {
+		return trimmed
+	}
+
+	rest := strings.TrimPrefix(trimmed, scheme)
+	if rest == "" {
+		return scheme
+	}
+	hasTrailingSlash := strings.HasSuffix(rest, "/")
+	cleaned := path.Clean("/" + rest)
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "" || cleaned == "." {
+		return scheme
+	}
+	res := scheme + cleaned
+	if hasTrailingSlash && !strings.HasSuffix(res, "/") {
+		res += "/"
+	}
+	return res
+}
+
+func normalizeS3Scheme(s string) string {
+	if strings.HasPrefix(s, "minio://") {
+		return "s3://" + strings.TrimPrefix(s, "minio://")
+	}
+	return s
+}
+
 // IsS3PrefixAllowed checks whether an S3 target URI or prefix matches any of the allowed policy prefixes.
-// It ensures strict segment boundary matching to prevent cross-tenant prefix confusion attacks.
+// It ensures strict segment boundary matching to prevent cross-tenant prefix confusion attacks and dot-segment traversal.
 func IsS3PrefixAllowed(prefix string, allowedPrefixes []string) bool {
-	cleanPrefix := strings.TrimSpace(prefix)
+	cleanPrefix := normalizeS3Scheme(cleanS3Prefix(prefix))
 	for _, allowed := range allowedPrefixes {
-		cleanAllowed := strings.TrimSpace(allowed)
+		cleanAllowed := normalizeS3Scheme(cleanS3Prefix(allowed))
 		if cleanAllowed == "*" || cleanAllowed == "s3://" {
 			return true
 		}

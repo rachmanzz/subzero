@@ -505,3 +505,40 @@ func TestManagementServer_InspectModulePolicy(t *testing.T) {
 		t.Errorf("expected 404 for nonexistent module, got %d", w404.Code)
 	}
 }
+
+func TestManagementServer_PathTraversalRejected(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "subzero-mgmt-traversal-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := management.NewFileStore(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := management.NewServer(management.ServerConfig{
+		Store: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := srv.Routes()
+
+	// 1. DELETE /api/modules/.. traversal attempt
+	wDel := httptest.NewRecorder()
+	reqDel := httptest.NewRequest(http.MethodDelete, "/api/modules/..", nil)
+	r.ServeHTTP(wDel, reqDel)
+	if wDel.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request on path traversal delete, got %d", wDel.Code)
+	}
+
+	// 2. GET /api/modules/..%2F.. download traversal attempt
+	wGet := httptest.NewRecorder()
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/modules/..%2F../download", nil)
+	r.ServeHTTP(wGet, reqGet)
+	if wGet.Code != http.StatusBadRequest && wGet.Code != http.StatusNotFound {
+		t.Errorf("expected 400 or 404 on path traversal get, got %d", wGet.Code)
+	}
+}

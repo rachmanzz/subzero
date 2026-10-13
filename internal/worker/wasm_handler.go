@@ -130,7 +130,7 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 			if len(allowedRoots) == 0 && workerPolicy != nil {
 				allowedRoots = workerPolicy.Filesystem.AllowedReadOnlyRoots
 			}
-			if len(allowedRoots) > 0 && !permission.IsPathUnderRoots(localPath, allowedRoots) {
+			if len(allowedRoots) == 0 || !permission.IsPathUnderRoots(localPath, allowedRoots) {
 				return &protocol.ResultMessage{
 					TaskID:       task.TaskID,
 					IsSuccess:    false,
@@ -229,18 +229,19 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 		if storageGet == nil {
 			storageGet = func(c context.Context, key string) ([]byte, error) {
 				// Validate S3 prefix if key is an S3 URI
-				if strings.HasPrefix(key, "s3://") {
-					if !permission.IsS3PrefixAllowed(key, effective.S3.AllowedPrefixes) {
+				if strings.HasPrefix(key, "s3://") || strings.HasPrefix(key, "minio://") {
+					if len(effective.S3.AllowedPrefixes) == 0 || !permission.IsS3PrefixAllowed(key, effective.S3.AllowedPrefixes) {
 						return nil, fmt.Errorf("%w: key %q not allowed by S3 prefixes %v",
 							permission.ErrUnauthorizedS3Prefix, key, effective.S3.AllowedPrefixes)
 					}
 				}
-				// Validate local filesystem path if key is a file URI
-				if strings.HasPrefix(key, "file://") || strings.HasPrefix(key, "/") {
+				// Validate local filesystem path if key is a file URI or local path (Fail-Closed)
+				if strings.HasPrefix(key, "file://") || strings.HasPrefix(key, "/") || !strings.Contains(key, "://") {
 					localPath := strings.TrimPrefix(key, "file://")
-					if len(effective.Filesystem.ReadOnly) > 0 && !permission.IsPathUnderRoots(localPath, effective.Filesystem.ReadOnly) {
+					allowedReadRoots := append(append([]string{}, effective.Filesystem.ReadOnly...), effective.Filesystem.ReadWrite...)
+					if len(allowedReadRoots) == 0 || !permission.IsPathUnderRoots(localPath, allowedReadRoots) {
 						return nil, fmt.Errorf("%w: path %q not allowed under filesystem roots %v",
-							permission.ErrUnauthorizedPath, localPath, effective.Filesystem.ReadOnly)
+							permission.ErrUnauthorizedPath, localPath, allowedReadRoots)
 					}
 				}
 				return storage.ReadAllStream(c, key)
@@ -251,11 +252,23 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 		if storagePut == nil {
 			storagePut = func(c context.Context, key string, data []byte) error {
 				// Validate S3 prefix if key is an S3 URI
-				if strings.HasPrefix(key, "s3://") {
-					if !permission.IsS3PrefixAllowed(key, effective.S3.AllowedPrefixes) {
+				if strings.HasPrefix(key, "s3://") || strings.HasPrefix(key, "minio://") {
+					if len(effective.S3.AllowedPrefixes) == 0 || !permission.IsS3PrefixAllowed(key, effective.S3.AllowedPrefixes) {
 						return fmt.Errorf("%w: key %q not allowed by S3 prefixes %v",
 							permission.ErrUnauthorizedS3Prefix, key, effective.S3.AllowedPrefixes)
 					}
+				}
+				// Validate local filesystem path if key is a file URI or local path (Fail-Closed)
+				if strings.HasPrefix(key, "file://") || strings.HasPrefix(key, "/") || !strings.Contains(key, "://") {
+					localPath := strings.TrimPrefix(key, "file://")
+					if len(effective.Filesystem.ReadWrite) == 0 || !permission.IsPathUnderRoots(localPath, effective.Filesystem.ReadWrite) {
+						return fmt.Errorf("%w: path %q not allowed under filesystem read-write roots %v",
+							permission.ErrUnauthorizedPath, localPath, effective.Filesystem.ReadWrite)
+					}
+				}
+				if effective.Files.MaxFileSizeBytes > 0 && int64(len(data)) > effective.Files.MaxFileSizeBytes {
+					return fmt.Errorf("%w: payload %d bytes exceeds limit %d bytes",
+						permission.ErrFileTooLarge, len(data), effective.Files.MaxFileSizeBytes)
 				}
 				d, err := storage.ResolveDriver(key)
 				if err != nil {

@@ -28,6 +28,7 @@ type Worker struct {
 	handler  HandlerFunc
 	watchdog *Watchdog
 	listener net.Listener
+	conns    map[net.Conn]struct{}
 	closed   bool
 	mu       sync.Mutex
 	wg       sync.WaitGroup
@@ -38,6 +39,7 @@ func New(cfg Config, handler HandlerFunc) *Worker {
 	w := &Worker{
 		cfg:     cfg,
 		handler: handler,
+		conns:   make(map[net.Conn]struct{}),
 	}
 
 	w.watchdog = NewWatchdog(cfg.IdleTimeout, func() {
@@ -70,7 +72,16 @@ func (w *Worker) Serve(l net.Listener) error {
 			return fmt.Errorf("worker: accept failed: %w", err)
 		}
 
+		w.mu.Lock()
+		if w.closed {
+			w.mu.Unlock()
+			_ = conn.Close()
+			return nil
+		}
+		w.conns[conn] = struct{}{}
 		w.wg.Add(1)
+		w.mu.Unlock()
+
 		go func(c net.Conn) {
 			defer w.wg.Done()
 			w.handleConn(c)
@@ -79,7 +90,12 @@ func (w *Worker) Serve(l net.Listener) error {
 }
 
 func (w *Worker) handleConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		w.mu.Lock()
+		delete(w.conns, conn)
+		w.mu.Unlock()
+		_ = conn.Close()
+	}()
 
 	for {
 		rawPayload, err := protocol.ReadFrame(conn, w.cfg.SecretKey, 0)
@@ -152,6 +168,10 @@ func (w *Worker) Close() error {
 	var err error
 	if w.listener != nil {
 		err = w.listener.Close()
+	}
+	// Force-close all lingering connections to unblock blocked ReadFrame operations
+	for c := range w.conns {
+		_ = c.Close()
 	}
 	w.mu.Unlock()
 

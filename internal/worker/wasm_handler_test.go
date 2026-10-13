@@ -394,3 +394,81 @@ func main() {
 	}
 	t.Logf("✓ Verified N-1: Hostcall denied fail-closed (%s) while SourceURI ingress respected worker ceiling", res.ErrorMessage)
 }
+
+func TestWorkerWasmHandler_FailClosed_StorageGet_NoRoots(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	testFilePath := tmpDir + "/secret.txt"
+	_ = os.WriteFile(testFilePath, []byte("super-secret"), 0644)
+
+	// Module tries to call GetStorageBlob
+	goSource := `package main
+import (
+	"fmt"
+	"github.com/rachmanzz/subzero/pkg/sdk"
+)
+func main() {
+	blob, err := sdk.GetStorageBlob("` + testFilePath + `")
+	if err != nil {
+		fmt.Printf("{\"is_success\":false,\"error_message\":%q}\n", err.Error())
+		return
+	}
+	fmt.Printf("{\"is_success\":true,\"processed_rows\":%d}\n", len(blob))
+}
+`
+	compiler := management.NewGoCompiler("")
+	compileRes, err := compiler.Compile(ctx, []byte(goSource), management.CompileOptions{
+		TenantID:   "tenant-sec",
+		ModuleName: "probe",
+		TargetOS:   "wasip1",
+		Optimize:   true,
+	})
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	cfg := wasm.DefaultConfig()
+	cfg.DefaultTimeout = 60 * time.Second
+	engine, err := wasm.NewEngine(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	defer engine.Close(ctx)
+
+	// Worker policy allows hostcall storage:get_object but has NO allowed filesystem roots!
+	policy := permission.DefaultWorkerPolicy()
+	policy.AllowedHostCalls = []string{"storage:get_object"}
+	policy.Filesystem.AllowedReadOnlyRoots = []string{} // EMPTY roots!
+	policy.Filesystem.AllowedReadWriteRoots = []string{}
+
+	resolver := func(target string) ([]byte, error) {
+		return compileRes.WasmBytes, nil
+	}
+	moduleReqResolver := func(target string) (*permission.ModuleRequest, error) {
+		return &permission.ModuleRequest{
+			HostCalls: []string{"storage:get_object"},
+		}, nil
+	}
+
+	handler := worker.NewWasmHandlerWithConfig(worker.WasmHandlerConfig{
+		Engine:                engine,
+		Resolver:              resolver,
+		WorkerPolicy:          &policy,
+		ModuleRequestResolver: moduleReqResolver,
+	})
+
+	task := &protocol.TaskMessage{
+		TaskID:       "task-sec-01",
+		TenantID:     "tenant-sec",
+		ActionTarget: "tenant-sec/probe",
+	}
+
+	res, err := handler(ctx, task)
+	if err != nil {
+		t.Fatalf("handler execution error: %v", err)
+	}
+	if res.IsSuccess {
+		t.Fatalf("expected hostcall to fail-closed when filesystem roots are empty, but succeeded!")
+	}
+	t.Logf("✓ Verified SEC-CRIT-1: Arbitrary host file read denied fail-closed: %s", res.ErrorMessage)
+}

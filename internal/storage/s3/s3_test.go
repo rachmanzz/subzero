@@ -62,3 +62,29 @@ func TestMinIORegistration(t *testing.T) {
 		t.Errorf("expected minio endpoint in URL, got %s", slot.TargetURL)
 	}
 }
+
+func TestS3DriverBucketIsolation(t *testing.T) {
+	// Configure driver with a designated bucket
+	driver, err := s3.New(s3.Config{
+		Bucket:    "tenant-vault",
+		Region:    "us-east-1",
+		AccessKey: "test-access-key",
+		SecretKey: "test-secret-key",
+	})
+	if err != nil {
+		t.Fatalf("s3.New failed: %v", err)
+	}
+
+	// Caller specifies a different bucket name in the URI: should not switch target bucket
+	slot, err := driver.GenerateUploadSlot(context.Background(), "s3://unauthorized-bucket/secret.csv", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateUploadSlot failed: %v", err)
+	}
+
+	if strings.Contains(slot.TargetURL, "//unauthorized-bucket.") || strings.HasPrefix(slot.TargetURL, "https://unauthorized-bucket.") {
+		t.Errorf("vulnerability detected: target bucket switched to unauthorized-bucket: %s", slot.TargetURL)
+	}
+	if !strings.Contains(slot.TargetURL, "tenant-vault.s3.us-east-1.amazonaws.com") {
+		t.Errorf("expected target host to remain pinned to tenant-vault: %s", slot.TargetURL)
+	}
+}

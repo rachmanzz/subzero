@@ -238,7 +238,15 @@ func VerifyModulePackage(rootPath string) (*ModulePackageInfo, error) {
 
 	// 3. Verify main entrypoint file
 	entrypointRel := cfg.Entrypoint
+	if hasTraversalSegment(entrypointRel) || filepath.IsAbs(entrypointRel) {
+		return nil, fmt.Errorf("structure: entrypoint %q contains forbidden path traversal", entrypointRel)
+	}
 	mainPath := filepath.Join(workDir, entrypointRel)
+	cleanWorkDir := filepath.Clean(workDir)
+	cleanMainPath := filepath.Clean(mainPath)
+	if !strings.HasPrefix(cleanMainPath, cleanWorkDir+string(filepath.Separator)) {
+		return nil, fmt.Errorf("structure: entrypoint %q escapes package workspace", entrypointRel)
+	}
 	if _, err := os.Stat(mainPath); os.IsNotExist(err) {
 		// Fallback check: look if any .go file in workDir contains func main
 		var foundMain string

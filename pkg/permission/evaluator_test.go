@@ -238,3 +238,36 @@ func TestEvaluate_LoggerWarnAllowedInDefaultPolicy(t *testing.T) {
 		t.Errorf("expected logger:warn to be granted")
 	}
 }
+
+func TestIsS3PrefixAllowed_DotSegmentTraversal(t *testing.T) {
+	allowedPrefixes := []string{"s3://tenant-a/data/"}
+
+	// Legitimate child prefix
+	if !IsS3PrefixAllowed("s3://tenant-a/data/file.csv", allowedPrefixes) {
+		t.Errorf("expected legitimate S3 prefix to be allowed")
+	}
+
+	// Traversal attempt to escape tenant-a/data to tenant-a/secret
+	if IsS3PrefixAllowed("s3://tenant-a/data/../secret/file.csv", allowedPrefixes) {
+		t.Errorf("expected dot-segment traversal to another directory to be rejected")
+	}
+
+	// Traversal attempt to escape bucket to tenant-b
+	if IsS3PrefixAllowed("s3://tenant-a/data/../../tenant-b/file.csv", allowedPrefixes) {
+		t.Errorf("expected dot-segment traversal to another bucket to be rejected")
+	}
+}
+
+func TestIsPathUnderRoots_PathTraversal(t *testing.T) {
+	roots := []string{"/tmp/subzero-workspace"}
+
+	// Valid subpath
+	if !IsPathUnderRoots("/tmp/subzero-workspace/data.csv", roots) {
+		t.Errorf("expected valid subpath to be allowed")
+	}
+
+	// Traversal attempt escaping root
+	if IsPathUnderRoots("/tmp/subzero-workspace/../../etc/passwd", roots) {
+		t.Errorf("expected path traversal escaping root to be rejected")
+	}
+}

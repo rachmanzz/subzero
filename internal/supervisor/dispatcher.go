@@ -60,6 +60,8 @@ type Dispatcher struct {
 	quit          chan struct{}
 	queueRouter   *queue.Router
 	queueConsumer *queue.Consumer
+	ctx           context.Context
+	cancel        context.CancelFunc
 	started       bool
 	closed        bool
 	mu            sync.RWMutex
@@ -77,11 +79,14 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 		cfg.SubLimit = 8
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	d := &Dispatcher{
 		cfg:       cfg,
 		taskQueue: make(chan Task, cfg.QueueSize),
 		semaphore: make(chan struct{}, cfg.Concurrency),
 		quit:      make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 
 	if cfg.QueueDriver != nil {
@@ -122,13 +127,15 @@ func (d *Dispatcher) workerLoop() {
 
 	for {
 		select {
+		case <-d.ctx.Done():
+			return
 		case <-d.quit:
 			return
 		case task, ok := <-d.taskQueue:
 			if !ok {
 				return
 			}
-			d.runTaskSafely(context.Background(), task)
+			d.runTaskSafely(d.ctx, task)
 		}
 	}
 }
@@ -232,6 +239,7 @@ func (d *Dispatcher) Stop() {
 		return
 	}
 	d.closed = true
+	d.cancel()
 	close(d.quit)
 	close(d.taskQueue)
 	consumer := d.queueConsumer

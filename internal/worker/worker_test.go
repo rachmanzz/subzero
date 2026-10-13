@@ -113,3 +113,51 @@ func TestWorkerIdleWatchdogAutoTermination(t *testing.T) {
 		t.Fatal("worker did not auto-terminate within timeout window")
 	}
 }
+
+func TestWorkerClose_WithLingeringIdleConnection(t *testing.T) {
+	tr, err := transport.Get("inproc")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	endpoint := "worker-lingering-pipe"
+	l, err := tr.Listen(context.Background(), endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	w := worker.New(worker.Config{
+		SecretKey:   []byte("secret"),
+		IdleTimeout: 10 * time.Second,
+	}, nil)
+
+	go func() {
+		_ = w.Serve(l)
+	}()
+
+	// Connect a client that hangs without sending any bytes
+	clientConn, err := tr.Dial(context.Background(), endpoint)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer clientConn.Close()
+
+	// Wait briefly so the worker accepts the connection
+	time.Sleep(20 * time.Millisecond)
+
+	// Close worker: must NOT deadlock waiting for clientConn
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- w.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("w.Close returned error: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("DEADLOCK DETECTED: w.Close hung due to lingering idle connection")
+	}
+}

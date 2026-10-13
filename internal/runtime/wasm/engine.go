@@ -141,26 +141,45 @@ type ExecOptions struct {
 	DirMounts []DirMount
 }
 
-type fuelListener struct {
+type fuelTracker struct {
 	cancel    context.CancelCauseFunc
 	fuel      *atomic.Int64
 	consumed  *atomic.Uint64
 	exhausted *atomic.Bool
 }
 
+type fuelTrackerKey struct{}
+
+func withFuelTracker(ctx context.Context, ft *fuelTracker) context.Context {
+	return context.WithValue(ctx, fuelTrackerKey{}, ft)
+}
+
+func getFuelTracker(ctx context.Context) *fuelTracker {
+	if ft, ok := ctx.Value(fuelTrackerKey{}).(*fuelTracker); ok {
+		return ft
+	}
+	return nil
+}
+
+type fuelListener struct{}
+
 func (l *fuelListener) NewFunctionListener(api.FunctionDefinition) experimental.FunctionListener {
 	return l
 }
 
 func (l *fuelListener) Before(ctx context.Context, mod api.Module, def api.FunctionDefinition, params []uint64, stackIterator experimental.StackIterator) {
-	if l.consumed != nil {
-		l.consumed.Add(1)
+	ft := getFuelTracker(ctx)
+	if ft == nil {
+		return
 	}
-	if l.fuel != nil {
-		if l.fuel.Add(-1) <= 0 {
-			if l.exhausted != nil && l.exhausted.CompareAndSwap(false, true) {
-				if l.cancel != nil {
-					l.cancel(ErrFuelExhausted)
+	if ft.consumed != nil {
+		ft.consumed.Add(1)
+	}
+	if ft.fuel != nil {
+		if ft.fuel.Add(-1) <= 0 {
+			if ft.exhausted != nil && ft.exhausted.CompareAndSwap(false, true) {
+				if ft.cancel != nil {
+					ft.cancel(ErrFuelExhausted)
 				}
 				_ = mod.CloseWithExitCode(ctx, 137)
 			}
@@ -173,6 +192,8 @@ func (l *fuelListener) After(ctx context.Context, mod api.Module, def api.Functi
 
 func (l *fuelListener) Abort(ctx context.Context, mod api.Module, def api.FunctionDefinition, err error) {
 }
+
+var globalFuelListener = &fuelListener{}
 
 // Execute runs a compiled .wasm binary in a sandboxed WASI environment with resource metering.
 func (e *Engine) Execute(ctx context.Context, wasmBytes []byte, opts ExecOptions) (*ExecResult, error) {
@@ -201,20 +222,21 @@ func (e *Engine) Execute(ctx context.Context, wasmBytes []byte, opts ExecOptions
 		fuelLimit = e.cfg.DefaultFuel
 	}
 
-	var listener *fuelListener
-	if fuelLimit > 0 {
+	metered := fuelLimit > 0
+	if metered {
 		fuelLeft.Store(int64(fuelLimit))
-		listener = &fuelListener{
+		ft := &fuelTracker{
 			cancel:    cancelCause,
 			fuel:      &fuelLeft,
 			consumed:  &opsCount,
 			exhausted: &exhausted,
 		}
-		execCtx = experimental.WithFunctionListenerFactory(execCtx, listener)
+		execCtx = withFuelTracker(execCtx, ft)
+		execCtx = experimental.WithFunctionListenerFactory(execCtx, globalFuelListener)
 	}
 
 	// 1. Get or compile Wasm bytecode into CompiledModule using parent ctx
-	compiled, err := e.compileOrGet(ctx, wasmBytes, listener)
+	compiled, err := e.compileOrGet(ctx, wasmBytes, metered)
 	if err != nil {
 		return nil, err
 	}
@@ -346,10 +368,10 @@ func (e *Engine) Execute(ctx context.Context, wasmBytes []byte, opts ExecOptions
 	}, nil
 }
 
-func (e *Engine) compileOrGet(ctx context.Context, wasmBytes []byte, listener *fuelListener) (wazero.CompiledModule, error) {
+func (e *Engine) compileOrGet(ctx context.Context, wasmBytes []byte, metered bool) (wazero.CompiledModule, error) {
 	h := sha256.Sum256(wasmBytes)
 	key := string(h[:])
-	if listener != nil {
+	if metered {
 		key += ":metered"
 	} else {
 		key += ":unmetered"
@@ -360,8 +382,8 @@ func (e *Engine) compileOrGet(ctx context.Context, wasmBytes []byte, listener *f
 	}
 
 	compileCtx := ctx
-	if listener != nil {
-		compileCtx = experimental.WithFunctionListenerFactory(compileCtx, listener)
+	if metered {
+		compileCtx = experimental.WithFunctionListenerFactory(compileCtx, globalFuelListener)
 	}
 
 	compiled, err := e.rt.CompileModule(compileCtx, wasmBytes)

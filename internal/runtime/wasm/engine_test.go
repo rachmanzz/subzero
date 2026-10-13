@@ -183,6 +183,68 @@ func step(n int) int {
 	}
 }
 
+func TestWasmEngine_FuelIsolation_AcrossExecutions(t *testing.T) {
+	ctx := context.Background()
+
+	loopSource := `package main
+func main() {
+	for i := 0; i < 200; i++ {
+		step(i)
+	}
+}
+//go:noinline
+func step(n int) int {
+	return n * 2
+}
+`
+	wasmBytes := compileHelper(t, loopSource)
+
+	engine, err := wasm.NewEngine(ctx, wasm.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	defer engine.Close(ctx)
+
+	// Execution 1: Generous fuel budget -> PASS
+	res1, err := engine.Execute(ctx, wasmBytes, wasm.ExecOptions{
+		FuelLimit: 50_000,
+		Timeout:   30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("execution 1 failed: %v", err)
+	}
+	if res1.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", res1.ExitCode)
+	}
+
+	// Execution 2 on same cached module: Tiny fuel budget -> MUST exhaust fuel!
+	res2, err := engine.Execute(ctx, wasmBytes, wasm.ExecOptions{
+		FuelLimit: 50,
+		Timeout:   30 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected execution 2 to fail with fuel exhaustion, but succeeded")
+	}
+	if !errors.Is(err, wasm.ErrFuelExhausted) {
+		t.Fatalf("expected ErrFuelExhausted, got: %v", err)
+	}
+	if res2 == nil || res2.ExitCode != 137 {
+		t.Fatalf("expected exit code 137 on fuel exhaustion")
+	}
+
+	// Execution 3 on same cached module: Generous fuel budget again -> MUST succeed without being tainted!
+	res3, err := engine.Execute(ctx, wasmBytes, wasm.ExecOptions{
+		FuelLimit: 50_000,
+		Timeout:   30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("execution 3 failed: %v", err)
+	}
+	if res3.ExitCode != 0 {
+		t.Fatalf("expected exit code 0 on execution 3, got %d", res3.ExitCode)
+	}
+}
+
 func TestWasmEngine_MemoryLimitExceeded(t *testing.T) {
 	ctx := context.Background()
 
