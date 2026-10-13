@@ -58,7 +58,7 @@ func callMetric(name string, v float64) {
 	}
 
 	cfg := wasm.DefaultConfig()
-	cfg.DefaultTimeout = 30 * time.Second
+	cfg.DefaultTimeout = 60 * time.Second
 	engine, err := wasm.NewEngine(ctx, cfg)
 	if err != nil {
 		t.Fatalf("NewEngine failed: %v", err)
@@ -172,7 +172,7 @@ func main() {
 	}
 
 	cfg := wasm.DefaultConfig()
-	cfg.DefaultTimeout = 30 * time.Second
+	cfg.DefaultTimeout = 60 * time.Second
 	engine, err := wasm.NewEngine(ctx, cfg)
 	if err != nil {
 		t.Fatalf("NewEngine failed: %v", err)

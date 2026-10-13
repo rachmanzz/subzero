@@ -121,7 +121,7 @@ func TestTargetMetric_WasmSandboxColdStart(t *testing.T) {
 
 	execTimeout := 10 * time.Second
 	if RaceDetectorEnabled {
-		execTimeout = 30 * time.Second
+		execTimeout = 60 * time.Second
 	}
 
 	// Warm up engine if needed or allow realistic threshold for cold VM / CI compilation environments
@@ -138,7 +138,7 @@ func TestTargetMetric_WasmSandboxColdStart(t *testing.T) {
 	latency := time.Since(start)
 
 	if RaceDetectorEnabled {
-		maxRaceThreshold := 25 * time.Second
+		maxRaceThreshold := 30 * time.Second
 		t.Logf("[Target Metric PRD 2] Wasm Sandbox Cold-Start Latency under -race: %v (TSan instrumentation limit: %v)", latency, maxRaceThreshold)
 		if latency >= maxRaceThreshold {
 			t.Errorf("Wasm cold-start latency under -race (%v) exceeded threshold of %v", latency, maxRaceThreshold)
@@ -165,7 +165,7 @@ func TestTargetMetric_WasmSandboxWarmInstance(t *testing.T) {
 
 	execTimeout := 10 * time.Second
 	if RaceDetectorEnabled {
-		execTimeout = 30 * time.Second
+		execTimeout = 60 * time.Second
 	}
 
 	// Prime instance

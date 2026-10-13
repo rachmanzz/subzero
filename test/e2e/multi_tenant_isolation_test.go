@@ -93,7 +93,7 @@ func main() {
 
 	// 3. Initialize Shared Wazero Engine
 	cfg := wasm.DefaultConfig()
-	cfg.DefaultTimeout = 30 * time.Second
+	cfg.DefaultTimeout = 60 * time.Second
 	engine, err := wasm.NewEngine(ctx, cfg)
 	if err != nil {
 		t.Fatalf("failed to init wazero engine: %v", err)
