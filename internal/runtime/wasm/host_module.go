@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/rachmanzz/subzero/pkg/permission"
 	"github.com/tetratelabs/wazero"
@@ -39,11 +40,28 @@ func GetHostContext(ctx context.Context) *HostContext {
 func RegisterHostModule(ctx context.Context, rt wazero.Runtime) error {
 	builder := rt.NewHostModuleBuilder("subzero_host")
 
+	// Helper to enforce fail-closed permission check supporting direct name and wildcard "*"
+	checkPermission := func(hc *HostContext, perm string) bool {
+		if hc == nil || hc.Permissions == nil {
+			return false
+		}
+		if hc.Permissions.HostCalls[perm] || hc.Permissions.HostCalls["*"] {
+			return true
+		}
+		// Also support category wildcard e.g. "logger:*"
+		if idx := strings.Index(perm, ":"); idx != -1 {
+			if hc.Permissions.HostCalls[perm[:idx]+":*"] {
+				return true
+			}
+		}
+		return false
+	}
+
 	// 1. host_storage_get(keyPtr, keyLen, outPtr, outMaxLen, outReadPtr uint32) (errCode uint32)
 	builder.NewFunctionBuilder().
 		WithFunc(func(ctx context.Context, m api.Module, keyPtr, keyLen, outPtr, outMaxLen, outReadPtr uint32) uint32 {
 			hc := GetHostContext(ctx)
-			if hc == nil || hc.Permissions == nil || !hc.Permissions.HostCalls["storage:get_object"] {
+			if !checkPermission(hc, "storage:get_object") {
 				return 1 // Permission Denied
 			}
 			if hc.StorageGet == nil {
@@ -82,7 +100,7 @@ func RegisterHostModule(ctx context.Context, rt wazero.Runtime) error {
 	builder.NewFunctionBuilder().
 		WithFunc(func(ctx context.Context, m api.Module, keyPtr, keyLen, valPtr, valLen uint32) uint32 {
 			hc := GetHostContext(ctx)
-			if hc == nil || hc.Permissions == nil || !hc.Permissions.HostCalls["storage:put_object"] {
+			if !checkPermission(hc, "storage:put_object") {
 				return 1 // Permission Denied
 			}
 			if hc.StoragePut == nil {
@@ -122,10 +140,8 @@ func RegisterHostModule(ctx context.Context, rt wazero.Runtime) error {
 				levelPerm = "logger:error"
 			}
 
-			if hc != nil && hc.Permissions != nil {
-				if !hc.Permissions.HostCalls[levelPerm] && !hc.Permissions.HostCalls["logger:*"] && !hc.Permissions.HostCalls["*"] {
-					return 1 // Permission Denied
-				}
+			if !checkPermission(hc, levelPerm) {
+				return 1 // Permission Denied (Fail-Closed)
 			}
 
 			mem := m.Memory()
@@ -148,7 +164,7 @@ func RegisterHostModule(ctx context.Context, rt wazero.Runtime) error {
 	builder.NewFunctionBuilder().
 		WithFunc(func(ctx context.Context, m api.Module, namePtr, nameLen uint32, val float64) uint32 {
 			hc := GetHostContext(ctx)
-			if hc == nil || hc.Permissions == nil || (!hc.Permissions.HostCalls["metrics:record"] && !hc.Permissions.HostCalls["*"]) {
+			if !checkPermission(hc, "metrics:record") {
 				return 1 // Permission Denied
 			}
 

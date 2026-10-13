@@ -169,3 +169,73 @@ func TestEvaluate_FileSizeTooLarge(t *testing.T) {
 		t.Fatalf("expected ErrFileTooLarge, got %v", err)
 	}
 }
+
+func TestEvaluate_S3PrefixSegmentBoundary(t *testing.T) {
+	policy := DefaultWorkerPolicy()
+	policy.S3.AllowedPrefixes = []string{"s3://tenant-vault/"}
+
+	// 1. Legitimate subfolder under tenant prefix
+	reqValid := &ModuleRequest{
+		S3: RequestS3{
+			AllowedPrefixes: []string{"s3://tenant-vault/2026/data.csv"},
+		},
+	}
+	effValid, err := Evaluate(&policy, reqValid)
+	if err != nil {
+		t.Fatalf("expected legitimate S3 prefix to succeed, got: %v", err)
+	}
+	if len(effValid.S3.AllowedPrefixes) != 1 {
+		t.Fatalf("expected 1 allowed prefix, got: %v", effValid.S3.AllowedPrefixes)
+	}
+
+	// 2. Tenant prefix-confusion attack (s3://tenant-vault-evil should be REJECTED)
+	reqAttack := &ModuleRequest{
+		S3: RequestS3{
+			AllowedPrefixes: []string{"s3://tenant-vault-evil/stolen.csv"},
+		},
+	}
+	_, err = Evaluate(&policy, reqAttack)
+	if err == nil {
+		t.Fatal("expected prefix confusion attack to be rejected, but succeeded")
+	}
+	if !errors.Is(err, ErrUnauthorizedS3Prefix) {
+		t.Fatalf("expected ErrUnauthorizedS3Prefix, got: %v", err)
+	}
+}
+
+func TestEvaluate_EmptyFilesystemInheritsCeiling(t *testing.T) {
+	policy := DefaultWorkerPolicy()
+
+	// Module that requests only host calls and no explicit filesystem paths
+	req := &ModuleRequest{
+		HostCalls: []string{"logger:info"},
+	}
+
+	eff, err := Evaluate(&policy, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Effective filesystem permissions inherit policy ceiling
+	if len(eff.Filesystem.ReadOnly) != len(policy.Filesystem.AllowedReadOnlyRoots) {
+		t.Errorf("expected %d read-only ceiling paths, got %d", len(policy.Filesystem.AllowedReadOnlyRoots), len(eff.Filesystem.ReadOnly))
+	}
+	if len(eff.Filesystem.ReadWrite) != len(policy.Filesystem.AllowedReadWriteRoots) {
+		t.Errorf("expected %d read-write ceiling paths, got %d", len(policy.Filesystem.AllowedReadWriteRoots), len(eff.Filesystem.ReadWrite))
+	}
+}
+
+func TestEvaluate_LoggerWarnAllowedInDefaultPolicy(t *testing.T) {
+	policy := DefaultWorkerPolicy()
+	req := &ModuleRequest{
+		HostCalls: []string{"logger:warn"},
+	}
+	eff, err := Evaluate(&policy, req)
+	if err != nil {
+		t.Fatalf("expected logger:warn to be permitted in DefaultWorkerPolicy, got: %v", err)
+	}
+	if !eff.HostCalls["logger:warn"] {
+		t.Errorf("expected logger:warn to be granted")
+	}
+}
+

@@ -105,6 +105,7 @@ func DefaultWorkerPolicy() WorkerPolicy {
 			"storage:put_object",
 			"logger:debug",
 			"logger:info",
+			"logger:warn",
 			"logger:error",
 			"metrics:record",
 		},
@@ -203,7 +204,7 @@ func Evaluate(policy *WorkerPolicy, req *ModuleRequest) (*EffectivePermissions, 
 			eff.Filesystem.ReadOnly = append(eff.Filesystem.ReadOnly, cleanPath)
 		}
 	} else {
-		// Inherit policy's allowed read-only roots ceiling
+		// Inherit policy's allowed read-only roots ceiling (worker-level boundary)
 		eff.Filesystem.ReadOnly = policy.Filesystem.AllowedReadOnlyRoots
 	}
 
@@ -220,7 +221,7 @@ func Evaluate(policy *WorkerPolicy, req *ModuleRequest) (*EffectivePermissions, 
 			eff.Filesystem.ReadWrite = append(eff.Filesystem.ReadWrite, cleanPath)
 		}
 	} else {
-		// Inherit policy's allowed read-write roots ceiling
+		// Inherit policy's allowed read-write roots ceiling (worker-level boundary)
 		eff.Filesystem.ReadWrite = policy.Filesystem.AllowedReadWriteRoots
 	}
 
@@ -346,14 +347,28 @@ func IsPathUnderRoots(path string, roots []string) bool {
 }
 
 // IsS3PrefixAllowed checks whether an S3 target URI or prefix matches any of the allowed policy prefixes.
+// It ensures strict segment boundary matching to prevent cross-tenant prefix confusion attacks.
 func IsS3PrefixAllowed(prefix string, allowedPrefixes []string) bool {
+	cleanPrefix := strings.TrimSpace(prefix)
 	for _, allowed := range allowedPrefixes {
 		cleanAllowed := strings.TrimSpace(allowed)
 		if cleanAllowed == "*" || cleanAllowed == "s3://" {
 			return true
 		}
-		if strings.HasPrefix(prefix, cleanAllowed) {
+		// Exact match
+		if cleanPrefix == cleanAllowed {
 			return true
+		}
+		// If allowed ends with '/', prefix must have it as a path prefix
+		if strings.HasSuffix(cleanAllowed, "/") {
+			if strings.HasPrefix(cleanPrefix, cleanAllowed) {
+				return true
+			}
+		} else {
+			// If allowed does not end with '/', prefix must match either exactly or with a '/' boundary
+			if strings.HasPrefix(cleanPrefix, cleanAllowed+"/") {
+				return true
+			}
 		}
 	}
 	return false
