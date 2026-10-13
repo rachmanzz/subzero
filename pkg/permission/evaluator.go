@@ -130,7 +130,8 @@ func DefaultWorkerPolicy() WorkerPolicy {
 	}
 }
 
-// PermissiveWorkerPolicy returns an unrestricted policy suitable for tests and development.
+// PermissiveWorkerPolicy returns an unrestricted policy suitable ONLY for tests and local development.
+// WARNING: Never use PermissiveWorkerPolicy in multi-tenant or production environments, as AllowedReadOnlyRoots allows "/".
 func PermissiveWorkerPolicy() WorkerPolicy {
 	return WorkerPolicy{
 		AllowedHostCalls: []string{"*"},
