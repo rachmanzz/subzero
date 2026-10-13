@@ -16,6 +16,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/tetratelabs/wazero/sys"
 )
 
 var (
@@ -37,8 +38,12 @@ type Config struct {
 	MemoryLimitPages         uint32        // Memory limit in 64KB Wasm pages (e.g. 512 pages = 32MB)
 	DefaultTimeout           time.Duration // Default timeout per execution (e.g. 10s)
 	DefaultFuel               uint64        // Default operation quota (0 = disabled/unlimited)
-	DisableCloseOnContextDone bool          // If true, disables context cancellation preemption (default: false, meaning preemption is enabled)
+	DisableCloseOnContextDone bool                    // If true, disables context cancellation preemption (default: false, meaning preemption is enabled)
+	CompilationCache          wazero.CompilationCache // Shared compilation cache across runtime instances
 }
+
+// defaultSharedCompilationCache shares JIT compilation across runtime instances for PRD sub-second cold starts.
+var defaultSharedCompilationCache = wazero.NewCompilationCache()
 
 // DefaultConfig returns safe multi-tenant sandbox defaults.
 func DefaultConfig() Config {
@@ -66,9 +71,15 @@ func NewEngine(ctx context.Context, cfg Config) (*Engine, error) {
 		cfg.DefaultTimeout = 10 * time.Second
 	}
 
+	compCache := cfg.CompilationCache
+	if compCache == nil {
+		compCache = defaultSharedCompilationCache
+	}
+
 	rtCfg := wazero.NewRuntimeConfig().
 		WithCloseOnContextDone(!cfg.DisableCloseOnContextDone).
-		WithMemoryLimitPages(cfg.MemoryLimitPages)
+		WithMemoryLimitPages(cfg.MemoryLimitPages).
+		WithCompilationCache(compCache)
 
 	rt := wazero.NewRuntimeWithConfig(ctx, rtCfg)
 
@@ -281,8 +292,14 @@ func (e *Engine) Execute(ctx context.Context, wasmBytes []byte, opts ExecOptions
 			}, fmt.Errorf("%w: %v (stderr: %s)", ErrMemoryLimitExceeded, err, stderrBuf.String())
 		}
 
+		exitCode := uint32(1)
+		var exitErr *sys.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+
 		return &ExecResult{
-			ExitCode:           1,
+			ExitCode:           exitCode,
 			Stdout:             stdoutBuf.String(),
 			Stderr:             stderrBuf.String(),
 			Duration:           duration,

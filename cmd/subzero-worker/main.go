@@ -160,6 +160,7 @@ func resolveWorkerPolicy(policyPath string) permission.WorkerPolicy {
 	}
 
 	// 3. Fallback to safe defaults
+	log.Printf("[Subzero Worker] WARNING: No worker policy specified (-policy or SUBZERO_WORKER_POLICY); falling back to DefaultWorkerPolicy with broad S3 permissions (s3://*). For multi-tenant production, specify an explicit WorkerPolicy.")
 	return permission.DefaultWorkerPolicy()
 }
 

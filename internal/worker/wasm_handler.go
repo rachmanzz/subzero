@@ -110,11 +110,15 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 
 		// 3. Enforce S3 prefix policy on task.SourceURI
 		if task.SourceURI != "" && strings.HasPrefix(task.SourceURI, "s3://") {
-			if !permission.IsS3PrefixAllowed(task.SourceURI, effective.S3.AllowedPrefixes) {
+			allowedPrefixes := effective.S3.AllowedPrefixes
+			if len(allowedPrefixes) == 0 && workerPolicy != nil {
+				allowedPrefixes = workerPolicy.S3.AllowedPrefixes
+			}
+			if !permission.IsS3PrefixAllowed(task.SourceURI, allowedPrefixes) {
 				return &protocol.ResultMessage{
 					TaskID:       task.TaskID,
 					IsSuccess:    false,
-					ErrorMessage: fmt.Sprintf("permission denied: source URI %q not permitted by S3 prefixes %v", task.SourceURI, effective.S3.AllowedPrefixes),
+					ErrorMessage: fmt.Sprintf("permission denied: source URI %q not permitted by S3 prefixes %v", task.SourceURI, allowedPrefixes),
 				}, nil
 			}
 		}
@@ -122,39 +126,49 @@ func NewWasmHandlerWithConfig(cfg WasmHandlerConfig) HandlerFunc {
 		// 3b. Enforce Local Filesystem root policy on task.SourceURI
 		if task.SourceURI != "" && (strings.HasPrefix(task.SourceURI, "file://") || strings.HasPrefix(task.SourceURI, "/")) {
 			localPath := strings.TrimPrefix(task.SourceURI, "file://")
-			if len(effective.Filesystem.ReadOnly) > 0 && !permission.IsPathUnderRoots(localPath, effective.Filesystem.ReadOnly) {
+			allowedRoots := effective.Filesystem.ReadOnly
+			if len(allowedRoots) == 0 && workerPolicy != nil {
+				allowedRoots = workerPolicy.Filesystem.AllowedReadOnlyRoots
+			}
+			if len(allowedRoots) > 0 && !permission.IsPathUnderRoots(localPath, allowedRoots) {
 				return &protocol.ResultMessage{
 					TaskID:       task.TaskID,
 					IsSuccess:    false,
-					ErrorMessage: fmt.Sprintf("permission denied: source URI %q not permitted under allowed filesystem roots %v", task.SourceURI, effective.Filesystem.ReadOnly),
+					ErrorMessage: fmt.Sprintf("permission denied: source URI %q not permitted under allowed filesystem roots %v", task.SourceURI, allowedRoots),
 				}, nil
 			}
 		}
 
 		// 4. Enforce File Extension policy on task.SourceURI
-		if task.SourceURI != "" && len(effective.Files.AllowedExtensions) > 0 {
-			hasWildcard := false
-			for _, ext := range effective.Files.AllowedExtensions {
-				if ext == "*" {
-					hasWildcard = true
-					break
-				}
+		if task.SourceURI != "" {
+			allowedExts := effective.Files.AllowedExtensions
+			if len(allowedExts) == 0 && workerPolicy != nil {
+				allowedExts = workerPolicy.Files.AllowedExtensions
 			}
-			if !hasWildcard {
-				sourceLower := strings.ToLower(task.SourceURI)
-				extAllowed := false
-				for _, ext := range effective.Files.AllowedExtensions {
-					if strings.HasSuffix(sourceLower, ext) {
-						extAllowed = true
+			if len(allowedExts) > 0 {
+				hasWildcard := false
+				for _, ext := range allowedExts {
+					if ext == "*" {
+						hasWildcard = true
 						break
 					}
 				}
-				if !extAllowed {
-					return &protocol.ResultMessage{
-						TaskID:       task.TaskID,
-						IsSuccess:    false,
-						ErrorMessage: fmt.Sprintf("permission denied: file extension of %q not permitted by policy %v", task.SourceURI, effective.Files.AllowedExtensions),
-					}, nil
+				if !hasWildcard {
+					sourceLower := strings.ToLower(task.SourceURI)
+					extAllowed := false
+					for _, ext := range allowedExts {
+						if strings.HasSuffix(sourceLower, ext) {
+							extAllowed = true
+							break
+						}
+					}
+					if !extAllowed {
+						return &protocol.ResultMessage{
+							TaskID:       task.TaskID,
+							IsSuccess:    false,
+							ErrorMessage: fmt.Sprintf("permission denied: file extension of %q not permitted by policy %v", task.SourceURI, allowedExts),
+						}, nil
+					}
 				}
 			}
 		}

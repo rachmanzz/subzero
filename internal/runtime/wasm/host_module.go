@@ -188,12 +188,35 @@ func RegisterHostModule(ctx context.Context, rt wazero.Runtime) error {
 			}
 
 			// Enforce tenant namespace to prevent cross-tenant collision / cardinality explosion
-			metricName := rawName
-			if hc != nil && hc.TenantID != "" && !strings.HasPrefix(rawName, "tenant."+hc.TenantID+".") {
-				metricName = fmt.Sprintf("tenant.%s.%s", hc.TenantID, rawName)
+			tenantID := "default"
+			if hc != nil && strings.TrimSpace(hc.TenantID) != "" {
+				tenantID = strings.TrimSpace(hc.TenantID)
 			}
 
-			if hc.MetricHandler != nil {
+			// Validate tenantID characters [a-zA-Z0-9_.-]
+			for _, ch := range tenantID {
+				if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '-') {
+					return 4 // Forbidden character in tenant ID
+				}
+			}
+
+			metricName := rawName
+			prefix := fmt.Sprintf("tenant.%s.", tenantID)
+			if !strings.HasPrefix(rawName, prefix) {
+				metricName = fmt.Sprintf("tenant.%s.%s", tenantID, rawName)
+			}
+
+			// Validate final metric name length and characters
+			if len(metricName) > 256 {
+				return 4 // Metric name too long
+			}
+			for _, ch := range metricName {
+				if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '-') {
+					return 4 // Forbidden character in final metric name
+				}
+			}
+
+			if hc != nil && hc.MetricHandler != nil {
 				hc.MetricHandler(metricName, val)
 			}
 			return 0

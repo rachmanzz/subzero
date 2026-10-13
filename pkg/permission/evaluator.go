@@ -97,7 +97,10 @@ type EffectiveFiles struct {
 	MaxFileSizeBytes  int64    `json:"max_file_size_bytes"`
 }
 
-// DefaultWorkerPolicy returns a standard safe policy for general worker processes.
+// DefaultWorkerPolicy returns a standard baseline policy for general worker processes.
+// NOTE (SEC-B): S3.AllowedPrefixes defaults to ["s3://"] for single-tenant and development compatibility.
+// In multi-tenant production deployments, operators MUST configure an explicit WorkerPolicy
+// restricting AllowedPrefixes to tenant-isolated namespaces (e.g. "s3://tenant-bucket/tenant-id/").
 func DefaultWorkerPolicy() WorkerPolicy {
 	return WorkerPolicy{
 		AllowedHostCalls: []string{

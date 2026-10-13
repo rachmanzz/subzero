@@ -3,6 +3,7 @@ package worker_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func main() {
 		TaskID:       "task-uuid-42",
 		TenantID:     "tenant-t1",
 		ActionTarget: "tenant-t1/transformer",
-		SourceURI:    "file:///tmp/input.xlsx",
+		SourceURI:    "file:///tmp/subzero-tenants/input.xlsx",
 	}
 
 	result, err := handler(ctx, task)
@@ -82,13 +83,33 @@ func TestWorkerWasmHandler_PermissionPolicyEnforcement(t *testing.T) {
 	}
 	defer engine.Close(ctx)
 
-	resolver := func(target string) ([]byte, error) {
-		return []byte{}, nil
+	// Compile a valid Wasm binary so failures are strictly due to policy enforcement, not empty compilation
+	compiler := management.NewGoCompiler("")
+	compileRes, err := compiler.Compile(ctx, []byte(`package main; func main() {}`), management.CompileOptions{
+		TenantID:   "tenant-t1",
+		ModuleName: "transformer",
+		TargetOS:   "wasip1",
+		Optimize:   true,
+	})
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
 	}
 
-	handler := worker.NewWasmHandler(engine, resolver)
+	resolver := func(target string) ([]byte, error) {
+		return compileRes.WasmBytes, nil
+	}
 
-	// 1. Task requests unauthorized host call
+	// Restrict worker policy to a specific tenant vault prefix
+	policy := permission.DefaultWorkerPolicy()
+	policy.S3.AllowedPrefixes = []string{"s3://allowed-tenant-vault/"}
+
+	handler := worker.NewWasmHandlerWithConfig(worker.WasmHandlerConfig{
+		Engine:       engine,
+		Resolver:     resolver,
+		WorkerPolicy: &policy,
+	})
+
+	// 1. Task requests unauthorized host call (privilege escalation)
 	taskEscalation := &protocol.TaskMessage{
 		TaskID:       "task-esc-1",
 		TenantID:     "tenant-t1",
@@ -104,38 +125,82 @@ func TestWorkerWasmHandler_PermissionPolicyEnforcement(t *testing.T) {
 	if res.IsSuccess {
 		t.Fatalf("expected task to fail due to unauthorized host call")
 	}
+	if !strings.Contains(res.ErrorMessage, "permission denied") {
+		t.Fatalf("expected error message to contain 'permission denied', got: %q", res.ErrorMessage)
+	}
 
-	// 2. Task requests S3 prefix outside policy
-	taskS3Violation := &protocol.TaskMessage{
+	// 2. Task requests S3 prefix outside policy (privilege escalation via config)
+	taskS3Escalation := &protocol.TaskMessage{
 		TaskID:       "task-s3-1",
 		TenantID:     "tenant-t1",
 		ActionTarget: "tenant-t1/transformer",
-		SourceURI:    "s3://other-tenant-vault/secret.csv",
 		CustomConfig: map[string]string{
 			"permissions": `{"s3": {"allowed_prefixes": ["s3://other-tenant-vault/"]}}`,
 		},
 	}
-	res2, err := handler(ctx, taskS3Violation)
+	res2, err := handler(ctx, taskS3Escalation)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res2.IsSuccess {
-		t.Fatalf("expected task to fail due to S3 prefix violation")
+		t.Fatalf("expected task to fail due to S3 privilege escalation")
+	}
+	if !strings.Contains(res2.ErrorMessage, "permission denied") {
+		t.Fatalf("expected error message to contain 'permission denied', got: %q", res2.ErrorMessage)
 	}
 
-	// 3. Task with forbidden file extension
-	taskExtViolation := &protocol.TaskMessage{
-		TaskID:       "task-ext-1",
+	// 3. Task with unauthorized S3 SourceURI at runtime (boundary gate check)
+	taskS3RuntimeViolation := &protocol.TaskMessage{
+		TaskID:       "task-s3-runtime-1",
 		TenantID:     "tenant-t1",
 		ActionTarget: "tenant-t1/transformer",
-		SourceURI:    "/tmp/payload.exe",
+		SourceURI:    "s3://other-tenant-vault/secret.csv",
 	}
-	res3, err := handler(ctx, taskExtViolation)
+	res3, err := handler(ctx, taskS3RuntimeViolation)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res3.IsSuccess {
+		t.Fatalf("expected task to fail due to unauthorized S3 source URI")
+	}
+	if !strings.Contains(res3.ErrorMessage, "not permitted by S3 prefixes") {
+		t.Fatalf("expected error message to contain 'not permitted by S3 prefixes', got: %q", res3.ErrorMessage)
+	}
+
+	// 4. Task with unauthorized local filesystem root (Step 3b check)
+	taskRootViolation := &protocol.TaskMessage{
+		TaskID:       "task-root-1",
+		TenantID:     "tenant-t1",
+		ActionTarget: "tenant-t1/transformer",
+		SourceURI:    "/var/data/unauthorized.csv",
+	}
+	res4, err := handler(ctx, taskRootViolation)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res4.IsSuccess {
+		t.Fatalf("expected task to fail due to unauthorized filesystem root")
+	}
+	if !strings.Contains(res4.ErrorMessage, "not permitted under allowed filesystem roots") {
+		t.Fatalf("expected error message to contain filesystem root rejection, got: %q", res4.ErrorMessage)
+	}
+
+	// 5. Task with forbidden file extension within allowed root (Step 4 check)
+	taskExtViolation := &protocol.TaskMessage{
+		TaskID:       "task-ext-1",
+		TenantID:     "tenant-t1",
+		ActionTarget: "tenant-t1/transformer",
+		SourceURI:    "/tmp/subzero-tenants/payload.exe",
+	}
+	res5, err := handler(ctx, taskExtViolation)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res5.IsSuccess {
 		t.Fatalf("expected task to fail due to forbidden file extension .exe")
+	}
+	if !strings.Contains(res5.ErrorMessage, "file extension") || !strings.Contains(res5.ErrorMessage, "not permitted") {
+		t.Fatalf("expected error message to contain extension rejection, got: %q", res5.ErrorMessage)
 	}
 }
 

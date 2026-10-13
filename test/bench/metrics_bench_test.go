@@ -138,12 +138,56 @@ func TestTargetMetric_WasmSandboxColdStart(t *testing.T) {
 	latency := time.Since(start)
 
 	if RaceDetectorEnabled {
-		t.Logf("[Target Metric PRD 2] Wasm Sandbox Cold-Start Latency under -race: %v (TSan instrumentation overhead active)", latency)
+		maxRaceThreshold := 25 * time.Second
+		t.Logf("[Target Metric PRD 2] Wasm Sandbox Cold-Start Latency under -race: %v (TSan instrumentation limit: %v)", latency, maxRaceThreshold)
+		if latency >= maxRaceThreshold {
+			t.Errorf("Wasm cold-start latency under -race (%v) exceeded threshold of %v", latency, maxRaceThreshold)
+		}
 	} else {
 		t.Logf("[Target Metric PRD 2] Wasm Sandbox Cold-Start Latency: %v (Target: < 1s nominal, limit: %v)", latency, maxColdStartThreshold)
 		if latency >= maxColdStartThreshold {
 			t.Errorf("Wasm cold-start latency (%v) exceeded target threshold of %v", latency, maxColdStartThreshold)
 		}
+	}
+}
+
+// TestTargetMetric_WasmSandboxWarmInstance verifies PRD Section 2:
+// Warm instance sandbox invocation must be sub-100ms.
+func TestTargetMetric_WasmSandboxWarmInstance(t *testing.T) {
+	wasmBytes := getPrecompiledWasm(t)
+	ctx := context.Background()
+
+	engine, err := wasm.NewEngine(ctx, wasm.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	defer engine.Close(ctx)
+
+	execTimeout := 10 * time.Second
+	if RaceDetectorEnabled {
+		execTimeout = 30 * time.Second
+	}
+
+	// Prime instance
+	if _, err := engine.Execute(ctx, wasmBytes, wasm.ExecOptions{Timeout: execTimeout}); err != nil {
+		t.Fatalf("prime execution failed: %v", err)
+	}
+
+	start := time.Now()
+	res, err := engine.Execute(ctx, wasmBytes, wasm.ExecOptions{Timeout: execTimeout})
+	if err != nil {
+		t.Fatalf("warm execution failed: %v", err)
+	}
+	warmLatency := time.Since(start)
+
+	maxWarm := 100 * time.Millisecond
+	if RaceDetectorEnabled {
+		maxWarm = 300 * time.Millisecond
+	}
+
+	t.Logf("[Target Metric PRD 2] Wasm Sandbox Warm Instance Latency: %v (Target: < %v, internal duration: %v)", warmLatency, maxWarm, res.Duration)
+	if warmLatency >= maxWarm {
+		t.Errorf("Warm sandbox instance latency (%v) exceeded target threshold of %v", warmLatency, maxWarm)
 	}
 }
 
