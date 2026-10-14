@@ -6,11 +6,11 @@ This document describes the orchestration layer of Subzero: the **Supervisor** (
 
 ## 1. Concurrency Dispatcher Engine
 
-Located in [`internal/supervisor/dispatcher.go`](../internal/supervisor/dispatcher.go), the Dispatcher handles task queueing and execution using an architecture inspired by the high-performance [`v3/worker`](https://github.com/rachmanzz/fiber-extras/tree/main/v3/worker) engine from the [rachmanzz/fiber-extras](https://github.com/rachmanzz/fiber-extras) ecosystem.
+Located in [`internal/supervisor/dispatcher.go`](../internal/supervisor/dispatcher.go), the Dispatcher handles task queueing and execution using an architecture inspired by the high-performance [`v3/worker`](https://github.com/rachmanzz/gosuite/tree/main/v3/worker) engine from the [rachmanzz/gosuite](https://github.com/rachmanzz/gosuite) ecosystem.
 
 > **Note on Upstream Origin**:
-> * `v3/worker`: Extracted from the `fiber-extras` project, providing an in-memory worker pool with sub-worker fan-out and panic recovery.
-> * `v3/queue`: Pluggable multi-driver queue broker (Redis, NATS, RabbitMQ, PostgreSQL) from `fiber-extras`, used optionally at the API Gateway / Producer level for persistent buffering.
+> * `v3/worker`: Extracted from the `gosuite` project, providing an in-memory worker pool with sub-worker fan-out and panic recovery.
+> * `v3/queue`: Pluggable multi-driver queue broker (Redis, NATS, RabbitMQ, PostgreSQL) from `gosuite`, used optionally at the API Gateway / Producer level for persistent buffering.
 
 ### Key Architectural Characteristics
 1. **Minimal External Dependencies**: Implemented with pure-Go, minimal third-party footprint and without heavy framework overhead.
@@ -81,7 +81,7 @@ type Watchdog struct {
 
 ## 4. Distributed Persistent Queue Integration (`v3/queue`)
 
-To bridge asynchronous task ingestion from Main API Gateways to Subzero's Supervisor, Subzero integrates directly with [`github.com/rachmanzz/fiber-extras/v3/queue`](https://github.com/rachmanzz/fiber-extras/tree/main/v3/queue).
+To bridge asynchronous task ingestion from Main API Gateways to Subzero's Supervisor, Subzero integrates directly with [`github.com/rachmanzz/gosuite/v3/queue`](https://github.com/rachmanzz/gosuite/tree/main/v3/queue).
 
 ### Key Features
 1. **Producer Task Enqueueing**:

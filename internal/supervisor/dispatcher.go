@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"time"
 
-	"github.com/rachmanzz/fiber-extras/v3/queue"
-	"github.com/rachmanzz/fiber-extras/v3/worker"
+	"github.com/rachmanzz/gosuite/v3/queue"
+	"github.com/rachmanzz/gosuite/v3/worker"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 )
 
@@ -19,7 +20,7 @@ var (
 	ErrNilTask          = errors.New("dispatcher: cannot dispatch nil task")
 )
 
-// Task defines an executable unit of work handled by the Dispatcher (aliases fiber-extras/v3/worker.Task).
+// Task defines an executable unit of work handled by the Dispatcher (aliases gosuite/v3/worker.Task).
 type Task = worker.Task
 
 // SubTaskFunc represents a sub-task function executed concurrently by a sub-worker.
@@ -35,11 +36,14 @@ func NewTaskFunc(name string, run func(ctx context.Context, pool SubWorkerPool) 
 
 // DispatcherConfig configures the task dispatcher engine.
 type DispatcherConfig struct {
-	Concurrency int          // Maximum number of concurrent tasks (throttling semaphore)
-	QueueSize   int          // Maximum in-memory task queue buffer
-	SubLimit    int          // Maximum parallel sub-workers per task
-	QueueDriver queue.Driver // Optional persistent queue driver from fiber-extras/v3/queue (e.g. MemoryDriver, Redis, NATS)
-	QueueRouter *queue.Router
+	Concurrency       int                 // Maximum number of concurrent tasks (throttling semaphore)
+	QueueSize         int                 // Maximum in-memory task queue buffer
+	SubLimit          int                 // Maximum parallel sub-workers per task
+	QueueDriver       queue.Driver        // Optional persistent queue driver from gosuite/v3/queue (e.g. MemoryDriver, Redis, NATS)
+	QueueRouter       *queue.Router
+	QueuePollInterval time.Duration       // Optional polling interval for queue consumer
+	QueueBatchSize    int                 // Optional batch size for queue consumer
+	QueueRetryPolicy  *queue.RetryPolicy  // Optional retry policy for queue consumer
 }
 
 // DefaultDispatcherConfig returns sensible defaults.
@@ -95,7 +99,7 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 			router = queue.NewRouter()
 		}
 		d.queueRouter = router
-		d.queueConsumer = queue.NewConsumer(cfg.QueueDriver, router, d)
+		d.queueConsumer = buildQueueConsumer(cfg.QueueDriver, router, cfg, d)
 	}
 
 	return d
@@ -147,7 +151,7 @@ func (d *Dispatcher) runTaskSafely(ctx context.Context, task Task) (err error) {
 		}
 	}()
 
-	pool := newSubWorkerPool(ctx, d.cfg.SubLimit)
+	pool := worker.NewSubWorkerPool(ctx, d.cfg.SubLimit, task.Name(), nil)
 	err = task.Execute(ctx, pool)
 	if waitErr := pool.Wait(); waitErr != nil && err == nil {
 		err = waitErr
@@ -218,7 +222,7 @@ func (d *Dispatcher) RegisterQueueHandler(topic string, handler func(ctx context
 	if d.queueRouter == nil {
 		d.queueRouter = queue.NewRouter()
 		if d.cfg.QueueDriver != nil && d.queueConsumer == nil {
-			d.queueConsumer = queue.NewConsumer(d.cfg.QueueDriver, d.queueRouter, d)
+			d.queueConsumer = buildQueueConsumer(d.cfg.QueueDriver, d.queueRouter, d.cfg, d)
 		}
 	}
 
@@ -252,48 +256,21 @@ func (d *Dispatcher) Stop() {
 	d.wg.Wait()
 }
 
-// subWorkerPool implements SubWorkerPool with concurrency limiting.
-type subWorkerPool struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	sem      chan struct{}
-	wg       sync.WaitGroup
-	errOnce  sync.Once
-	firstErr error
+// NewSubWorkerPool constructs a SubWorkerPool using gosuite/v3/worker.
+func NewSubWorkerPool(ctx context.Context, limit int, taskName string) SubWorkerPool {
+	return worker.NewSubWorkerPool(ctx, limit, taskName, nil)
 }
 
-func newSubWorkerPool(parent context.Context, limit int) *subWorkerPool {
-	ctx, cancel := context.WithCancel(parent)
-	return &subWorkerPool{
-		ctx:    ctx,
-		cancel: cancel,
-		sem:    make(chan struct{}, limit),
+func buildQueueConsumer(driver queue.Driver, router *queue.Router, cfg DispatcherConfig, disp worker.Dispatcher) *queue.Consumer {
+	var opts []queue.ConsumerOption
+	if cfg.QueueBatchSize > 0 {
+		opts = append(opts, queue.WithBatchSize(cfg.QueueBatchSize))
 	}
-}
-
-func (p *subWorkerPool) Go(fn SubTaskFunc) {
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
-
-		select {
-		case <-p.ctx.Done():
-			return
-		case p.sem <- struct{}{}:
-		}
-		defer func() { <-p.sem }()
-
-		if err := fn(p.ctx); err != nil {
-			p.errOnce.Do(func() {
-				p.firstErr = err
-				p.cancel()
-			})
-		}
-	}()
-}
-
-func (p *subWorkerPool) Wait() error {
-	p.wg.Wait()
-	p.cancel()
-	return p.firstErr
+	if cfg.QueuePollInterval > 0 {
+		opts = append(opts, queue.WithPollInterval(cfg.QueuePollInterval))
+	}
+	if cfg.QueueRetryPolicy != nil {
+		opts = append(opts, queue.WithRetryPolicy(*cfg.QueueRetryPolicy))
+	}
+	return queue.NewConsumer(driver, router, disp, opts...)
 }

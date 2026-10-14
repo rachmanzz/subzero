@@ -79,7 +79,7 @@ Subzero addresses these problems through a decoupled, multi-stage architecture g
 
 ## 3. The Orchestration Layer & The `v3/worker` Concurrency Pattern
 
-At the core of the Subzero Supervisor daemon ([`internal/supervisor/dispatcher.go`](../internal/supervisor/dispatcher.go)) lies the **`v3/worker` pattern**, adapted from the high-throughput `fiber-extras` ecosystem (`github.com/rachmanzz/fiber-extras/v3/worker`).
+At the core of the Subzero Supervisor daemon ([`internal/supervisor/dispatcher.go`](../internal/supervisor/dispatcher.go)) lies the **`v3/worker` pattern**, adapted from the high-throughput `gosuite` ecosystem (`github.com/rachmanzz/gosuite/v3/worker`).
 
 The `v3/worker` engine solves the challenge of high-burst traffic, panic safety, and parallel task distribution:
 
@@ -117,7 +117,7 @@ User-defined or third-party transformation logic is susceptible to runtime excep
 - If Tenant Alpha's module encounters a panic, it is safely captured and reported as a failed `ResultMessage`. **The Supervisor daemon never crashes**, and sibling tasks running in other slots continue completely unaffected.
 
 ### 3.3 `SubWorkerPool` Fan-Out (Parallel Multi-Sheet / Large Dataset Processing)
-For massive workbooks or high-volume datasets, the `v3/worker` pattern provides the `SubWorkerPool` abstraction (type-aliased directly to `github.com/rachmanzz/fiber-extras/v3/worker.SubWorkerPool`):
+For massive workbooks or high-volume datasets, the `v3/worker` pattern provides the `SubWorkerPool` abstraction (type-aliased directly to `github.com/rachmanzz/gosuite/v3/worker.SubWorkerPool`):
 ```go
 type SubWorkerPool = worker.SubWorkerPool
 ```

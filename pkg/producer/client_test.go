@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rachmanzz/fiber-extras/v3/queue"
+	"github.com/rachmanzz/gosuite/v3/queue"
 	"github.com/rachmanzz/subzero/internal/storage/local"
 	"github.com/rachmanzz/subzero/internal/worker"
 	"github.com/rachmanzz/subzero/pkg/producer"

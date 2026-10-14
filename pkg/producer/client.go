@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rachmanzz/fiber-extras/v3/queue"
+	"github.com/rachmanzz/gosuite/v3/queue"
 	"github.com/rachmanzz/subzero/internal/storage"
 	"github.com/rachmanzz/subzero/pkg/protocol"
 	"github.com/rachmanzz/subzero/pkg/transport"
@@ -27,7 +27,7 @@ type Config struct {
 	SecretKey     []byte        // HMAC-SHA256 signature key
 	Timeout       time.Duration // Network request timeout
 	StorageDriver storage.Driver
-	QueueDriver   queue.Driver // Optional distributed queue driver (fiber-extras/v3/queue)
+	QueueDriver   queue.Driver // Optional distributed queue driver (gosuite/v3/queue)
 }
 
 // Client provides an API SDK for Main API Gateways to interface with Subzero.

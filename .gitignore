@@ -1,4 +1,5 @@
 # Knowledge and local docs
+.knowledges/
 .knowladges/
 
 # Binaries for programs and plugins
@@ -9,6 +10,7 @@
 *.dylib
 bin/
 dist/
+issue-detector
 
 # Test binary, output & coverage
 *.test

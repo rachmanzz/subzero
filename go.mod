@@ -9,8 +9,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.3
 	github.com/go-chi/chi/v5 v5.3.2
-	github.com/rachmanzz/fiber-extras/v3/queue v0.2.0
-	github.com/rachmanzz/fiber-extras/v3/worker v0.2.0
+	github.com/rachmanzz/gosuite/v3/queue v0.2.3
+	github.com/rachmanzz/gosuite/v3/worker v0.2.3
 	github.com/tetratelabs/wazero v1.12.0
 )
 
